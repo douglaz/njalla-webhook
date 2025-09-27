@@ -8,10 +8,7 @@ use axum::{
 use std::sync::Arc;
 
 pub fn create_routes(njalla_client: NjallaClient, config: Config) -> Router {
-    let handler = Arc::new(WebhookHandler::new(
-        Arc::new(njalla_client),
-        config,
-    ));
+    let handler = Arc::new(WebhookHandler::new(Arc::new(njalla_client), config));
 
     Router::new()
         .route("/healthz", {

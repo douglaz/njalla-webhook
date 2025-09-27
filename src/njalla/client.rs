@@ -1,15 +1,14 @@
 use super::types::*;
 use crate::error::{Error, Result};
-use reqwest::{Client as HttpClient, header};
+use reqwest::{header, Client as HttpClient};
 use serde_json::json;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 const NJALLA_API_URL: &str = "https://njal.la/api/1/";
 
 pub struct Client {
     http_client: HttpClient,
-    api_token: String,
 }
 
 impl Client {
@@ -31,10 +30,7 @@ impl Client {
             .build()
             .map_err(|e| Error::Configuration(format!("Failed to create HTTP client: {}", e)))?;
 
-        Ok(Self {
-            http_client,
-            api_token: api_token.to_string(),
-        })
+        Ok(Self { http_client })
     }
 
     async fn call_api<T>(&self, request: JsonRpcRequest) -> Result<T>
@@ -53,10 +49,7 @@ impl Client {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(Error::NjallaApi(format!(
-                "HTTP {}: {}",
-                status, text
-            )));
+            return Err(Error::NjallaApi(format!("HTTP {}: {}", status, text)));
         }
 
         let json_response: JsonRpcResponse<T> = response.json().await?;
@@ -68,9 +61,9 @@ impl Client {
             )));
         }
 
-        json_response.result.ok_or_else(|| {
-            Error::NjallaApi("Empty response from Njalla API".to_string())
-        })
+        json_response
+            .result
+            .ok_or_else(|| Error::NjallaApi("Empty response from Njalla API".to_string()))
     }
 
     pub async fn list_domains(&self) -> Result<Vec<Domain>> {

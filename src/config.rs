@@ -19,8 +19,7 @@ impl Config {
         let njalla_api_token = env::var("NJALLA_API_TOKEN")
             .expect("NJALLA_API_TOKEN environment variable is required");
 
-        let webhook_host = env::var("WEBHOOK_HOST")
-            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        let webhook_host = env::var("WEBHOOK_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
         let webhook_port = env::var("WEBHOOK_PORT")
             .unwrap_or_else(|_| "8888".to_string())

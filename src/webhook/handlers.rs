@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use crate::njalla::{self, Client as NjallaClient};
 use axum::{extract::Query, Json};
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 pub struct WebhookHandler {
     njalla_client: Arc<NjallaClient>,
@@ -37,8 +37,13 @@ impl WebhookHandler {
         }))
     }
 
-    pub async fn get_records(&self, query: Query<GetRecordsQuery>) -> Result<Json<GetRecordsResponse>> {
-        let zone_name = query.zone_name.as_ref()
+    pub async fn get_records(
+        &self,
+        query: Query<GetRecordsQuery>,
+    ) -> Result<Json<GetRecordsResponse>> {
+        let zone_name = query
+            .zone_name
+            .as_ref()
             .ok_or_else(|| Error::InvalidRequest("zone parameter is required".to_string()))?;
 
         info!("Getting records for zone: {}", zone_name);
@@ -56,18 +61,29 @@ impl WebhookHandler {
             .iter()
             .filter(|r| {
                 // Filter out records that external-dns doesn't handle
-                matches!(r.record_type.as_str(), "A" | "AAAA" | "CNAME" | "TXT" | "MX" | "SRV")
+                matches!(
+                    r.record_type.as_str(),
+                    "A" | "AAAA" | "CNAME" | "TXT" | "MX" | "SRV"
+                )
             })
             .map(|r| Endpoint::from_njalla_record(r, zone_name))
             .collect();
 
-        info!("Returning {} endpoints for zone {}", endpoints.len(), zone_name);
+        info!(
+            "Returning {} endpoints for zone {}",
+            endpoints.len(),
+            zone_name
+        );
 
         Ok(Json(GetRecordsResponse { endpoints }))
     }
 
-    pub async fn apply_changes(&self, Json(request): Json<ApplyChangesRequest>) -> Result<Json<ApplyChangesResponse>> {
-        info!("Applying changes: {} creates, {} updates, {} deletes",
+    pub async fn apply_changes(
+        &self,
+        Json(request): Json<ApplyChangesRequest>,
+    ) -> Result<Json<ApplyChangesResponse>> {
+        info!(
+            "Applying changes: {} creates, {} updates, {} deletes",
             request.changes.create.len(),
             request.changes.update_new.len(),
             request.changes.delete.len()
@@ -93,7 +109,12 @@ impl WebhookHandler {
         }
 
         // Process updates (delete old, create new)
-        for (old, new) in request.changes.update_old.iter().zip(request.changes.update_new.iter()) {
+        for (old, new) in request
+            .changes
+            .update_old
+            .iter()
+            .zip(request.changes.update_new.iter())
+        {
             if let Err(e) = self.update_endpoint(old, new).await {
                 error!("Failed to update endpoint {}: {}", new.dns_name, e);
                 errors.push(format!("Update {}: {}", new.dns_name, e));
@@ -113,19 +134,30 @@ impl WebhookHandler {
         }
 
         if !errors.is_empty() && applied_count == 0 {
-            return Err(Error::Internal(format!("All operations failed: {:?}", errors)));
+            return Err(Error::Internal(format!(
+                "All operations failed: {:?}",
+                errors
+            )));
         }
 
         let message = if errors.is_empty() {
             format!("Successfully applied {} changes", applied_count)
         } else {
-            format!("Applied {} changes with {} errors: {:?}", applied_count, errors.len(), errors)
+            format!(
+                "Applied {} changes with {} errors: {:?}",
+                applied_count,
+                errors.len(),
+                errors
+            )
         };
 
         Ok(Json(ApplyChangesResponse { message }))
     }
 
-    pub async fn adjust_endpoints(&self, Json(endpoints): Json<Vec<Endpoint>>) -> Result<Json<AdjustEndpointsResponse>> {
+    pub async fn adjust_endpoints(
+        &self,
+        Json(endpoints): Json<Vec<Endpoint>>,
+    ) -> Result<Json<AdjustEndpointsResponse>> {
         // This is optional - we just return the endpoints as-is
         debug!("Adjusting {} endpoints", endpoints.len());
         Ok(Json(AdjustEndpointsResponse { endpoints }))
@@ -143,7 +175,8 @@ impl WebhookHandler {
         let name = self.extract_record_name(&endpoint.dns_name, &zone);
 
         for target in &endpoint.targets {
-            let priority = endpoint.provider_specific
+            let priority = endpoint
+                .provider_specific
                 .iter()
                 .find(|ps| ps.name == "priority")
                 .and_then(|ps| ps.value.parse().ok());
@@ -192,10 +225,10 @@ impl WebhookHandler {
                 record.name.clone()
             };
 
-            if record_name == name &&
-               record.record_type == endpoint.record_type &&
-               endpoint.targets.contains(&record.content) {
-
+            if record_name == name
+                && record.record_type == endpoint.record_type
+                && endpoint.targets.contains(&record.content)
+            {
                 let request = njalla::RemoveRecordRequest {
                     domain: zone.clone(),
                     id: record.id,
@@ -225,9 +258,16 @@ impl WebhookHandler {
         // Fall back to extracting last two parts as zone
         let parts: Vec<&str> = dns_name.split('.').collect();
         if parts.len() >= 2 {
-            Ok(format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1]))
+            Ok(format!(
+                "{}.{}",
+                parts[parts.len() - 2],
+                parts[parts.len() - 1]
+            ))
         } else {
-            Err(Error::InvalidRequest(format!("Cannot extract zone from {}", dns_name)))
+            Err(Error::InvalidRequest(format!(
+                "Cannot extract zone from {}",
+                dns_name
+            )))
         }
     }
 

@@ -23,7 +23,11 @@ pub struct Endpoint {
     pub record_ttl: Option<i64>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub labels: HashMap<String, String>,
-    #[serde(rename = "providerSpecific", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        rename = "providerSpecific",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub provider_specific: Vec<ProviderSpecific>,
 }
 
