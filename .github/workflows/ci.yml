@@ -124,7 +124,8 @@ jobs:
       - name: Get image metadata
         id: meta
         run: |
-          IMAGE_ID=$(docker images --format '{{.ID}}' | head -1)
+          # Get the image ID of njalla-webhook specifically
+          IMAGE_ID=$(docker images njalla-webhook:latest --format '{{.ID}}')
           echo "IMAGE_ID=$IMAGE_ID" >> $GITHUB_OUTPUT
           REPO_LOWER=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
           echo "REPO_LOWER=$REPO_LOWER" >> $GITHUB_OUTPUT

@@ -77,6 +77,7 @@
               paths = [
                 pkgs.coreutils
                 pkgs.cacert
+                pkgs.netcat-gnu  # For healthcheck
               ];
               pathsToLink = [ "/bin" ];
             };
@@ -88,7 +89,7 @@
               };
               Env = [
                 "RUST_LOG=info"
-                "WEBHOOK_HOST=127.0.0.1"
+                "WEBHOOK_HOST=0.0.0.0"
                 "WEBHOOK_PORT=8888"
                 "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
@@ -98,7 +99,7 @@
                 "org.opencontainers.image.licenses" = "MIT";
               };
               Healthcheck = {
-                Test = ["CMD" "${pkgs.coreutils}/bin/timeout" "5" "${pkgs.coreutils}/bin/sh" "-c" "echo -e 'GET /healthz HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' | ${pkgs.coreutils}/bin/nc 127.0.0.1 8888 | ${pkgs.coreutils}/bin/grep -q '200 OK'"];
+                Test = ["CMD" "${pkgs.coreutils}/bin/timeout" "5" "${pkgs.coreutils}/bin/sh" "-c" "echo -e 'GET /health HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' | ${pkgs.coreutils}/bin/nc 127.0.0.1 8888 | ${pkgs.coreutils}/bin/grep -q '200 OK'"];
                 Interval = 30000000000; # 30 seconds in nanoseconds
                 Timeout = 5000000000;   # 5 seconds in nanoseconds
                 Retries = 3;
