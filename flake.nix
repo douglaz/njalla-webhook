@@ -75,22 +75,35 @@
             copyToRoot = pkgs.buildEnv {
               name = "image-root";
               paths = [
+                njalla-webhook
+                pkgs.bashInteractive
                 pkgs.coreutils
+                pkgs.curl
+                pkgs.wget
                 pkgs.cacert
-                pkgs.netcat-gnu  # For healthcheck
-                pkgs.curl        # For API testing
-                pkgs.wget        # Alternative to curl
-                pkgs.jq          # JSON processing
-                pkgs.bash        # Shell for debugging
-                pkgs.busybox     # Basic unix tools
-                pkgs.dnsutils    # DNS debugging (dig, nslookup)
-                pkgs.iputils     # Network tools (ping)
+                pkgs.jq
+                pkgs.netcat
+                pkgs.procps
+                pkgs.htop
+                pkgs.vim
+                pkgs.less
+                pkgs.gnugrep
+                pkgs.gawk
+                pkgs.gnused
+                pkgs.findutils
+                pkgs.which
+                pkgs.net-tools
+                pkgs.iputils
+                pkgs.dnsutils
+                pkgs.gnutar
+                pkgs.file
+                pkgs.busybox  # Fallback for any missing tools
               ];
-              pathsToLink = [ "/bin" ];
+              pathsToLink = [ "/bin" "/etc" "/share" ];
             };
 
             config = {
-              Cmd = [ "${njalla-webhook}/bin/njalla-webhook" ];
+              Cmd = [ "/bin/njalla-webhook" ];
               ExposedPorts = {
                 "8888/tcp" = {};
               };
@@ -99,7 +112,8 @@
                 "WEBHOOK_HOST=0.0.0.0"
                 "WEBHOOK_PORT=8888"
                 "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-                "PATH=/bin:${njalla-webhook}/bin"
+                "SYSTEM_CERTIFICATE_PATH=${pkgs.cacert}/etc/ssl/certs"
+                "PATH=/bin:/usr/bin:/usr/local/bin"
               ];
               Labels = {
                 "org.opencontainers.image.source" = "https://github.com/yourusername/njalla-webhook";
