@@ -78,6 +78,13 @@
                 pkgs.coreutils
                 pkgs.cacert
                 pkgs.netcat-gnu  # For healthcheck
+                pkgs.curl        # For API testing
+                pkgs.wget        # Alternative to curl
+                pkgs.jq          # JSON processing
+                pkgs.bash        # Shell for debugging
+                pkgs.busybox     # Basic unix tools
+                pkgs.dnsutils    # DNS debugging (dig, nslookup)
+                pkgs.iputils     # Network tools (ping)
               ];
               pathsToLink = [ "/bin" ];
             };
@@ -92,6 +99,7 @@
                 "WEBHOOK_HOST=0.0.0.0"
                 "WEBHOOK_PORT=8888"
                 "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                "PATH=/bin:${njalla-webhook}/bin"
               ];
               Labels = {
                 "org.opencontainers.image.source" = "https://github.com/yourusername/njalla-webhook";
