@@ -39,7 +39,7 @@ pub struct DnsRecord {
     #[serde(rename = "type")]
     pub record_type: String,
     pub content: String,
-    pub ttl: u32,
+    pub ttl: Option<u32>,
     pub priority: Option<u32>,
 }
 

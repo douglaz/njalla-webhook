@@ -120,7 +120,7 @@ impl Endpoint {
             targets: vec![record.content.clone()],
             record_type: record.record_type.clone(),
             set_identifier: None,
-            record_ttl: Some(record.ttl as i64),
+            record_ttl: record.ttl.map(|ttl| ttl as i64),
             labels: HashMap::new(),
             provider_specific: if let Some(priority) = record.priority {
                 vec![ProviderSpecific {
