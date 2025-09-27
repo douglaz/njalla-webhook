@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // JSON-RPC 2.0 types
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,6 +54,7 @@ pub struct AddRecordRequest {
     pub priority: Option<u32>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct UpdateRecordRequest {
     pub domain: String,

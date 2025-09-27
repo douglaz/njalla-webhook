@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 // External-DNS webhook types based on the specification
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomainFilter {
     pub include: Option<Vec<String>>,
@@ -86,6 +87,7 @@ pub struct HealthResponse {
 // Helper implementations
 
 impl Endpoint {
+    #[allow(dead_code)]
     pub fn new(dns_name: String, record_type: String, targets: Vec<String>) -> Self {
         Self {
             dns_name,
@@ -98,6 +100,7 @@ impl Endpoint {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_ttl(mut self, ttl: i64) -> Self {
         self.record_ttl = Some(ttl);
         self

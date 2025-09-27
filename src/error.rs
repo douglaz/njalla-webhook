@@ -20,6 +20,7 @@ pub enum Error {
     DomainNotAllowed(String),
 
     #[error("Record not found: {0}")]
+    #[allow(dead_code)]
     RecordNotFound(String),
 
     #[error("Configuration error: {0}")]

@@ -122,6 +122,7 @@ impl Client {
         Ok(record)
     }
 
+    #[allow(dead_code)]
     pub async fn update_record(&self, request: UpdateRecordRequest) -> Result<DnsRecord> {
         let params = json!({
             "domain": request.domain,
