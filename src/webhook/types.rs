@@ -64,8 +64,21 @@ pub struct GetRecordsResponse {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ApplyChangesRequest {
-    pub changes: Changes,
+#[serde(untagged)]
+pub enum ApplyChangesRequest {
+    // External-DNS sends changes directly at root level
+    Direct(Changes),
+    // But we'll also support wrapped format for compatibility
+    Wrapped { changes: Changes },
+}
+
+impl ApplyChangesRequest {
+    pub fn into_changes(self) -> Changes {
+        match self {
+            ApplyChangesRequest::Direct(changes) => changes,
+            ApplyChangesRequest::Wrapped { changes } => changes,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

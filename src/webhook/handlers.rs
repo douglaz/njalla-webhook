@@ -146,14 +146,27 @@ impl WebhookHandler {
         &self,
         Json(request): Json<ApplyChangesRequest>,
     ) -> Result<Json<ApplyChangesResponse>> {
+        let changes = request.into_changes();
+
         info!(
             "Applying changes: {} creates, {} updates, {} deletes",
-            request.changes.create.len(),
-            request.changes.update_new.len(),
-            request.changes.delete.len()
+            changes.create.len(),
+            changes.update_new.len(),
+            changes.delete.len()
         );
 
-        if request.changes.is_empty() {
+        // Log the actual changes being requested
+        for endpoint in &changes.create {
+            info!("CREATE: {} -> {}", endpoint.dns_name, endpoint.targets.join(", "));
+        }
+        for (old, new) in changes.update_old.iter().zip(changes.update_new.iter()) {
+            info!("UPDATE: {} from {} to {}", new.dns_name, old.targets.join(", "), new.targets.join(", "));
+        }
+        for endpoint in &changes.delete {
+            info!("DELETE: {} -> {}", endpoint.dns_name, endpoint.targets.join(", "));
+        }
+
+        if changes.is_empty() {
             return Ok(Json(ApplyChangesResponse {
                 message: "No changes to apply".to_string(),
             }));
@@ -163,7 +176,7 @@ impl WebhookHandler {
         let mut errors = Vec::new();
 
         // Process deletions first
-        for endpoint in &request.changes.delete {
+        for endpoint in &changes.delete {
             if let Err(e) = self.delete_endpoint(endpoint).await {
                 error!("Failed to delete endpoint {}: {}", endpoint.dns_name, e);
                 errors.push(format!("Delete {}: {}", endpoint.dns_name, e));
@@ -173,11 +186,10 @@ impl WebhookHandler {
         }
 
         // Process updates (delete old, create new)
-        for (old, new) in request
-            .changes
+        for (old, new) in changes
             .update_old
             .iter()
-            .zip(request.changes.update_new.iter())
+            .zip(changes.update_new.iter())
         {
             if let Err(e) = self.update_endpoint(old, new).await {
                 error!("Failed to update endpoint {}: {}", new.dns_name, e);
@@ -188,7 +200,7 @@ impl WebhookHandler {
         }
 
         // Process creations
-        for endpoint in &request.changes.create {
+        for endpoint in &changes.create {
             if let Err(e) = self.create_endpoint(endpoint).await {
                 error!("Failed to create endpoint {}: {}", endpoint.dns_name, e);
                 errors.push(format!("Create {}: {}", endpoint.dns_name, e));
@@ -221,10 +233,10 @@ impl WebhookHandler {
     pub async fn adjust_endpoints(
         &self,
         Json(endpoints): Json<Vec<Endpoint>>,
-    ) -> Result<Json<AdjustEndpointsResponse>> {
+    ) -> Result<Json<Vec<Endpoint>>> {
         // This is optional - we just return the endpoints as-is
         debug!("Adjusting {} endpoints", endpoints.len());
-        Ok(Json(AdjustEndpointsResponse { endpoints }))
+        Ok(Json(endpoints))
     }
 
     // Helper methods for record operations

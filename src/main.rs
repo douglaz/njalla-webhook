@@ -1,10 +1,11 @@
 mod config;
 mod error;
+mod middleware;
 mod njalla;
 mod webhook;
 
 use anyhow::Result;
-use axum::{serve, Router};
+use axum::{middleware as axum_middleware, serve, Router};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
@@ -37,6 +38,8 @@ async fn main() -> Result<()> {
     // Build the application
     let app = Router::new()
         .merge(routes::create_routes(njalla_client, config.clone()))
+        .layer(axum_middleware::from_fn(middleware::error_handling_middleware))
+        .layer(axum_middleware::from_fn(middleware::logging_middleware))
         .layer(TraceLayer::new_for_http());
 
     // Create socket address
