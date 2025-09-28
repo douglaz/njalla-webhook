@@ -58,41 +58,90 @@ impl WebhookHandler {
         &self,
         query: Query<GetRecordsQuery>,
     ) -> Result<Json<GetRecordsResponse>> {
-        let zone_name = query
-            .zone_name
-            .as_ref()
-            .ok_or_else(|| Error::InvalidRequest("zone parameter is required".to_string()))?;
+        // If zone_name is provided, get records for that specific zone
+        if let Some(zone_name) = query.zone_name.as_ref() {
+            info!("Getting records for zone: {}", zone_name);
 
-        info!("Getting records for zone: {}", zone_name);
+            // Check if domain is allowed
+            if !self.config.is_domain_allowed(zone_name) {
+                return Err(Error::DomainNotAllowed(zone_name.to_string()));
+            }
 
-        // Check if domain is allowed
-        if !self.config.is_domain_allowed(zone_name) {
-            return Err(Error::DomainNotAllowed(zone_name.to_string()));
+            // Fetch records from Njalla
+            let records = self.njalla_client.list_records(zone_name).await?;
+
+            // Convert Njalla records to external-dns endpoints
+            let endpoints: Vec<Endpoint> = records
+                .iter()
+                .filter(|r| {
+                    // Filter out records that external-dns doesn't handle
+                    matches!(
+                        r.record_type.as_str(),
+                        "A" | "AAAA" | "CNAME" | "TXT" | "MX" | "SRV"
+                    )
+                })
+                .map(|r| Endpoint::from_njalla_record(r, zone_name))
+                .collect();
+
+            info!(
+                "Returning {} endpoints for zone {}",
+                endpoints.len(),
+                zone_name
+            );
+
+            Ok(Json(GetRecordsResponse { endpoints }))
+        } else {
+            // No zone specified - return records for all configured domains
+            info!("Getting records for all configured domains");
+
+            let domains = if let Some(ref domain_filter) = self.config.domain_filter {
+                // Use configured domain filter
+                info!("Using configured domain filter: {:?}", domain_filter);
+                domain_filter.clone()
+            } else {
+                // List all domains from Njalla API
+                info!("Fetching all domains from Njalla API");
+                self.njalla_client
+                    .list_domains()
+                    .await?
+                    .into_iter()
+                    .map(|d| d.name)
+                    .collect()
+            };
+
+            let mut all_endpoints = Vec::new();
+
+            for domain in &domains {
+                info!("Fetching records for domain: {}", domain);
+
+                match self.njalla_client.list_records(domain).await {
+                    Ok(records) => {
+                        let endpoints: Vec<Endpoint> = records
+                            .iter()
+                            .filter(|r| {
+                                matches!(
+                                    r.record_type.as_str(),
+                                    "A" | "AAAA" | "CNAME" | "TXT" | "MX" | "SRV"
+                                )
+                            })
+                            .map(|r| Endpoint::from_njalla_record(r, domain))
+                            .collect();
+
+                        info!("Found {} endpoints for domain {}", endpoints.len(), domain);
+                        all_endpoints.extend(endpoints);
+                    }
+                    Err(e) => {
+                        error!("Failed to fetch records for domain {}: {}", domain, e);
+                        // Continue with other domains even if one fails
+                    }
+                }
+            }
+
+            info!("Returning {} total endpoints", all_endpoints.len());
+            Ok(Json(GetRecordsResponse {
+                endpoints: all_endpoints,
+            }))
         }
-
-        // Fetch records from Njalla
-        let records = self.njalla_client.list_records(zone_name).await?;
-
-        // Convert Njalla records to external-dns endpoints
-        let endpoints: Vec<Endpoint> = records
-            .iter()
-            .filter(|r| {
-                // Filter out records that external-dns doesn't handle
-                matches!(
-                    r.record_type.as_str(),
-                    "A" | "AAAA" | "CNAME" | "TXT" | "MX" | "SRV"
-                )
-            })
-            .map(|r| Endpoint::from_njalla_record(r, zone_name))
-            .collect();
-
-        info!(
-            "Returning {} endpoints for zone {}",
-            endpoints.len(),
-            zone_name
-        );
-
-        Ok(Json(GetRecordsResponse { endpoints }))
     }
 
     pub async fn apply_changes(
