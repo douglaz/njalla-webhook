@@ -1,12 +1,12 @@
 use axum::{
-    body::{Body, Bytes},
+    body::Body,
     extract::Request,
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use std::time::Instant;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 pub async fn logging_middleware(request: Request, next: Next) -> Response {
     let start = Instant::now();

@@ -58,6 +58,7 @@ pub struct GetRecordsQuery {
     pub zone_name: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct GetRecordsResponse {
     pub endpoints: Vec<Endpoint>,
@@ -86,6 +87,7 @@ pub struct ApplyChangesResponse {
     pub message: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct AdjustEndpointsResponse {
     pub endpoints: Vec<Endpoint>,

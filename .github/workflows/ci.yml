@@ -136,15 +136,24 @@ jobs:
           TAGS=""
           REPO_LOWER=${{ steps.meta.outputs.REPO_LOWER }}
 
-          # Always tag with commit SHA
+          # Get current date for date-based tags
+          DATE=$(date -u +%Y%m%d)
+          DATE_TIME=$(date -u +%Y%m%d-%H%M%S)
+
+          # Always tag with commit SHA (both formats)
           TAGS="ghcr.io/${REPO_LOWER}:sha-${GITHUB_SHA::7}"
+          TAGS="${TAGS},ghcr.io/${REPO_LOWER}:${GITHUB_SHA::7}"
+          TAGS="${TAGS},ghcr.io/${REPO_LOWER}:${GITHUB_SHA}"
 
           # Tag with branch name if not a tag
           if [[ "${{ github.ref }}" == "refs/heads/"* ]]; then
             BRANCH=${GITHUB_REF##*/}
             TAGS="${TAGS},ghcr.io/${REPO_LOWER}:${BRANCH}"
+            TAGS="${TAGS},ghcr.io/${REPO_LOWER}:${BRANCH}-${DATE}"
+            TAGS="${TAGS},ghcr.io/${REPO_LOWER}:${BRANCH}-${GITHUB_SHA::7}"
             if [[ "${BRANCH}" == "master" ]] || [[ "${BRANCH}" == "main" ]]; then
               TAGS="${TAGS},ghcr.io/${REPO_LOWER}:latest"
+              TAGS="${TAGS},ghcr.io/${REPO_LOWER}:${DATE}"
             fi
           fi
 
