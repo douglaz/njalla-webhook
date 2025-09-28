@@ -1,0 +1,193 @@
+# Example Ingress resources to test External-DNS with Njalla
+# These will automatically create DNS records in your Njalla domains
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example-app
+  namespace: default
+  annotations:
+    # Optional: Explicitly set the hostname
+    # If not set, uses spec.rules[].host
+    external-dns.alpha.kubernetes.io/hostname: app.example.com
+    # Optional: Set custom TTL (in seconds)
+    external-dns.alpha.kubernetes.io/ttl: "300"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: app.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: example-service
+            port:
+              number: 80
+  tls:
+  - hosts:
+    - app.example.com
+    secretName: app-example-com-tls
+---
+# Example with multiple hosts
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: multi-host-app
+  namespace: default
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: www.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web-service
+            port:
+              number: 80
+  - host: api.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: api-service
+            port:
+              number: 8080
+  - host: admin.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: admin-service
+            port:
+              number: 3000
+  tls:
+  - hosts:
+    - www.example.com
+    - api.example.com
+    - admin.example.com
+    secretName: example-com-tls
+---
+# Example with wildcard certificate
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wildcard-app
+  namespace: default
+  annotations:
+    # For wildcard certificates with cert-manager
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: "*.apps.example.com"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: wildcard-service
+            port:
+              number: 80
+  tls:
+  - hosts:
+    - "*.apps.example.com"
+    secretName: wildcard-apps-example-com-tls
+---
+# Example Service with LoadBalancer (if supported by your cloud provider)
+apiVersion: v1
+kind: Service
+metadata:
+  name: example-loadbalancer
+  namespace: default
+  annotations:
+    # This will create an A record pointing to the LoadBalancer IP
+    external-dns.alpha.kubernetes.io/hostname: lb.example.com
+spec:
+  type: LoadBalancer
+  selector:
+    app: example-app
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+---
+# Example Service with explicit target
+apiVersion: v1
+kind: Service
+metadata:
+  name: example-external
+  namespace: default
+  annotations:
+    # Create a CNAME record pointing to an external service
+    external-dns.alpha.kubernetes.io/hostname: external.example.com
+    external-dns.alpha.kubernetes.io/target: some-external-service.amazonaws.com
+spec:
+  type: ExternalName
+  externalName: some-external-service.amazonaws.com
+---
+# Test application deployment (nginx)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example-app
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: example-app
+  template:
+    metadata:
+      labels:
+        app: example-app
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+---
+# Service for the test application
+apiVersion: v1
+kind: Service
+metadata:
+  name: example-service
+  namespace: default
+spec:
+  selector:
+    app: example-app
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+---
+# Instructions for testing:
+#
+# 1. Update the domain names in this file to match your actual Njalla domains
+# 2. Apply this manifest: kubectl apply -f test-ingress.yaml
+# 3. Check External-DNS logs: kubectl logs -n external-dns deployment/external-dns
+# 4. Check Njalla webhook logs: kubectl logs -n external-dns deployment/njalla-webhook
+# 5. Verify DNS records are created: nslookup app.example.com
+# 6. Test with curl: curl -H "Host: app.example.com" http://<ingress-controller-ip>
+#
+# To see what records will be created without actually creating them:
+# 1. Set DRY_RUN=true in the njalla-webhook deployment
+# 2. Apply your ingress/service
+# 3. Check the webhook logs to see what would have been created
