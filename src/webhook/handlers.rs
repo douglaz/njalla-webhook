@@ -44,12 +44,13 @@ impl WebhookHandler {
 
         Ok((
             StatusCode::OK,
-            [
-                ("content-type", "application/external.dns.webhook+json;version=1"),
-            ],
+            [(
+                "content-type",
+                "application/external.dns.webhook+json;version=1",
+            )],
             Json(serde_json::json!({
                 "filters": filters
-            }))
+            })),
         ))
     }
 
