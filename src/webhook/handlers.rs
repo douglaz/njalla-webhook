@@ -57,7 +57,7 @@ impl WebhookHandler {
     pub async fn get_records(
         &self,
         query: Query<GetRecordsQuery>,
-    ) -> Result<Json<GetRecordsResponse>> {
+    ) -> Result<Json<Vec<Endpoint>>> {
         // If zone_name is provided, get records for that specific zone
         if let Some(zone_name) = query.zone_name.as_ref() {
             info!("Getting records for zone: {}", zone_name);
@@ -89,7 +89,7 @@ impl WebhookHandler {
                 zone_name
             );
 
-            Ok(Json(GetRecordsResponse { endpoints }))
+            Ok(Json(endpoints))
         } else {
             // No zone specified - return records for all configured domains
             info!("Getting records for all configured domains");
@@ -138,9 +138,7 @@ impl WebhookHandler {
             }
 
             info!("Returning {} total endpoints", all_endpoints.len());
-            Ok(Json(GetRecordsResponse {
-                endpoints: all_endpoints,
-            }))
+            Ok(Json(all_endpoints))
         }
     }
 
