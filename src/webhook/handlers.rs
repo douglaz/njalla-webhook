@@ -2,7 +2,7 @@ use super::types::*;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::njalla::{self, Client as NjallaClient};
-use axum::{extract::Query, Json};
+use axum::{extract::Query, http::StatusCode, Json};
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
@@ -35,6 +35,12 @@ impl WebhookHandler {
             status: "ready".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         }))
+    }
+
+    pub async fn negotiate(&self) -> Result<impl axum::response::IntoResponse> {
+        // External-DNS expects a 200 OK response from the negotiate endpoint
+        // to confirm the webhook provider is compatible
+        Ok(StatusCode::OK)
     }
 
     pub async fn get_records(

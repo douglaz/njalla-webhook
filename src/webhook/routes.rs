@@ -19,6 +19,10 @@ pub fn create_routes(njalla_client: NjallaClient, config: Config) -> Router {
             let h = handler.clone();
             get(move || async move { h.ready().await })
         })
+        .route("/negotiate", {
+            let h = handler.clone();
+            get(move || async move { h.negotiate().await })
+        })
         .route("/records", {
             let h = handler.clone();
             get(move |query| async move { h.get_records(query).await })
