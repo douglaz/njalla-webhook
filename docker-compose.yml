@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  njalla-webhook:
+    image: ghcr.io/douglaz/njalla-webhook:latest
+    container_name: njalla-webhook
+    environment:
+      # Required: Your Njalla API token
+      NJALLA_API_TOKEN: ${NJALLA_API_TOKEN}
+
+      # Optional: Comma-separated list of domains to manage
+      # Leave empty to manage all domains in your Njalla account
+      DOMAIN_FILTER: ${DOMAIN_FILTER:-}
+
+      # Webhook server configuration
+      WEBHOOK_HOST: ${WEBHOOK_HOST:-0.0.0.0}
+      WEBHOOK_PORT: ${WEBHOOK_PORT:-8888}
+
+      # Logging level: trace, debug, info, warn, error
+      RUST_LOG: ${RUST_LOG:-info}
+
+      # Dry run mode - set to true to test without making changes
+      DRY_RUN: ${DRY_RUN:-false}
+
+      # Cache TTL for DNS records (seconds)
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-60}
+
+    ports:
+      # Expose webhook port
+      - "${WEBHOOK_EXTERNAL_PORT:-8888}:8888"
+
+    restart: unless-stopped
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8888/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+    # Logging configuration
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: External-DNS container for local testing
+  # Uncomment to run external-dns alongside the webhook
+  # external-dns:
+  #   image: registry.k8s.io/external-dns/external-dns:v0.14.0
+  #   container_name: external-dns
+  #   command:
+  #     - --source=service
+  #     - --source=ingress
+  #     - --provider=webhook
+  #     - --webhook-provider-url=http://njalla-webhook:8888
+  #     - --domain-filter=${DOMAIN_FILTER:-}
+  #     - --registry=txt
+  #     - --txt-owner-id=external-dns
+  #     - --log-level=info
+  #     - --interval=30s
+  #   depends_on:
+  #     - njalla-webhook
+  #   restart: unless-stopped
+
+# Optional: Create a network for better isolation
+networks:
+  default:
+    name: external-dns-network
+    driver: bridge
