@@ -42,7 +42,10 @@ pub async fn logging_middleware(request: Request, next: Next) -> Response {
         // Try to parse as JSON to debug structure
         match serde_json::from_slice::<serde_json::Value>(&bytes) {
             Ok(json) => {
-                info!("Parsed JSON structure: {}", serde_json::to_string_pretty(&json).unwrap_or_default());
+                info!(
+                    "Parsed JSON structure: {}",
+                    serde_json::to_string_pretty(&json).unwrap_or_default()
+                );
             }
             Err(e) => {
                 warn!("Failed to parse body as JSON: {}", e);

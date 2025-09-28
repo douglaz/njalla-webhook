@@ -54,10 +54,7 @@ impl WebhookHandler {
         ))
     }
 
-    pub async fn get_records(
-        &self,
-        query: Query<GetRecordsQuery>,
-    ) -> Result<Json<Vec<Endpoint>>> {
+    pub async fn get_records(&self, query: Query<GetRecordsQuery>) -> Result<Json<Vec<Endpoint>>> {
         // If zone_name is provided, get records for that specific zone
         if let Some(zone_name) = query.zone_name.as_ref() {
             info!("Getting records for zone: {}", zone_name);
@@ -157,13 +154,26 @@ impl WebhookHandler {
 
         // Log the actual changes being requested
         for endpoint in &changes.create {
-            info!("CREATE: {} -> {}", endpoint.dns_name, endpoint.targets.join(", "));
+            info!(
+                "CREATE: {} -> {}",
+                endpoint.dns_name,
+                endpoint.targets.join(", ")
+            );
         }
         for (old, new) in changes.update_old.iter().zip(changes.update_new.iter()) {
-            info!("UPDATE: {} from {} to {}", new.dns_name, old.targets.join(", "), new.targets.join(", "));
+            info!(
+                "UPDATE: {} from {} to {}",
+                new.dns_name,
+                old.targets.join(", "),
+                new.targets.join(", ")
+            );
         }
         for endpoint in &changes.delete {
-            info!("DELETE: {} -> {}", endpoint.dns_name, endpoint.targets.join(", "));
+            info!(
+                "DELETE: {} -> {}",
+                endpoint.dns_name,
+                endpoint.targets.join(", ")
+            );
         }
 
         if changes.is_empty() {
@@ -186,11 +196,7 @@ impl WebhookHandler {
         }
 
         // Process updates (delete old, create new)
-        for (old, new) in changes
-            .update_old
-            .iter()
-            .zip(changes.update_new.iter())
-        {
+        for (old, new) in changes.update_old.iter().zip(changes.update_new.iter()) {
             if let Err(e) = self.update_endpoint(old, new).await {
                 error!("Failed to update endpoint {}: {}", new.dns_name, e);
                 errors.push(format!("Update {}: {}", new.dns_name, e));

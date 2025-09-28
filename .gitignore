@@ -25,4 +25,4 @@ Thumbs.db
 
 # Testing
 *.log
-coverage/
+coverage/*.tar.gz

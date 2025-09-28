@@ -38,7 +38,9 @@ async fn main() -> Result<()> {
     // Build the application
     let app = Router::new()
         .merge(routes::create_routes(njalla_client, config.clone()))
-        .layer(axum_middleware::from_fn(middleware::error_handling_middleware))
+        .layer(axum_middleware::from_fn(
+            middleware::error_handling_middleware,
+        ))
         .layer(axum_middleware::from_fn(middleware::logging_middleware))
         .layer(TraceLayer::new_for_http());
 
