@@ -38,9 +38,19 @@ impl WebhookHandler {
     }
 
     pub async fn negotiate(&self) -> Result<impl axum::response::IntoResponse> {
-        // External-DNS expects a 200 OK response from the negotiate endpoint
-        // to confirm the webhook provider is compatible
-        Ok(StatusCode::OK)
+        // External-DNS expects negotiation endpoint to return domain filters
+        // with proper content type header
+        let filters = self.config.domain_filter.clone().unwrap_or_default();
+
+        Ok((
+            StatusCode::OK,
+            [
+                ("content-type", "application/external.dns.webhook+json;version=1"),
+            ],
+            Json(serde_json::json!({
+                "filters": filters
+            }))
+        ))
     }
 
     pub async fn get_records(

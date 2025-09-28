@@ -11,6 +11,10 @@ pub fn create_routes(njalla_client: NjallaClient, config: Config) -> Router {
     let handler = Arc::new(WebhookHandler::new(Arc::new(njalla_client), config));
 
     Router::new()
+        .route("/", {
+            let h = handler.clone();
+            get(move || async move { h.negotiate().await })
+        })
         .route("/healthz", {
             let h = handler.clone();
             get(move || async move { h.health().await })
@@ -18,10 +22,6 @@ pub fn create_routes(njalla_client: NjallaClient, config: Config) -> Router {
         .route("/ready", {
             let h = handler.clone();
             get(move || async move { h.ready().await })
-        })
-        .route("/negotiate", {
-            let h = handler.clone();
-            get(move || async move { h.negotiate().await })
         })
         .route("/records", {
             let h = handler.clone();
