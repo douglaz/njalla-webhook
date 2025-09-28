@@ -128,10 +128,10 @@ spec:
           failureThreshold: 3
         resources:
           requests:
-            memory: "64Mi"
+            memory: "128Mi"
             cpu: "50m"
           limits:
-            memory: "256Mi"
+            memory: "128Mi"
             cpu: "200m"
 ---
 # Service to expose the webhook within the cluster
@@ -195,10 +195,10 @@ spec:
         - --log-format=text
         resources:
           requests:
-            memory: "64Mi"
+            memory: "128Mi"
             cpu: "50m"
           limits:
-            memory: "256Mi"
+            memory: "128Mi"
             cpu: "200m"
 ---
 # Optional: NetworkPolicy for security
