@@ -209,10 +209,10 @@ spec:
           periodSeconds: 10
         resources:
           requests:
-            memory: "64Mi"
+            memory: "128Mi"
             cpu: "50m"
           limits:
-            memory: "256Mi"
+            memory: "128Mi"
             cpu: "200m"
 ---
 apiVersion: v1
@@ -303,10 +303,10 @@ spec:
         - --log-level=info
         resources:
           requests:
-            memory: "64Mi"
+            memory: "128Mi"
             cpu: "50m"
           limits:
-            memory: "256Mi"
+            memory: "128Mi"
             cpu: "200m"
 ```
 
