@@ -177,9 +177,13 @@ impl WebhookHandler {
         }
 
         if changes.is_empty() {
-            return Ok(Json(ApplyChangesResponse {
-                message: "No changes to apply".to_string(),
-            }));
+            return Ok(Json(serde_json::json!({
+                "applied_changes": {
+                    "creates": 0,
+                    "updates": 0,
+                    "deletes": 0
+                }
+            })));
         }
 
         let mut applied_count = 0;
