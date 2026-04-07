@@ -26,3 +26,6 @@ Thumbs.db
 # Testing
 *.log
 coverage/*.tar.gz
+
+# bv (beads viewer) local config and caches
+.bv/

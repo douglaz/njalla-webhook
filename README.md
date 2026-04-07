@@ -383,7 +383,7 @@ metadata:
 |----------|--------|-------------|----------|
 | `/healthz` | GET | Health check | `{"status": "ok"}` |
 | `/records` | GET | List DNS records | Array of records |
-| `/records` | POST | Apply changes | Success message |
+| `/records` | POST | Apply changes | `204 No Content` on success |
 | `/adjustendpoints` | POST | Adjust endpoints | Returns input unchanged |
 
 ### Webhook Protocol
@@ -412,7 +412,7 @@ Response:
 Request body:
 ```json
 {
-  "Create": [
+  "create": [
     {
       "dnsName": "new.example.com",
       "targets": ["192.168.1.2"],
@@ -420,17 +420,21 @@ Request body:
       "recordTTL": 300
     }
   ],
-  "Delete": [
+  "delete": [
     {
       "dnsName": "old.example.com",
       "targets": ["192.168.1.3"],
       "recordType": "A"
     }
   ],
-  "UpdateOld": [],
-  "UpdateNew": []
+  "updateOld": [],
+  "updateNew": []
 }
 ```
+
+Successful requests return `204 No Content` with an empty response body.
+
+For backward compatibility, the webhook also accepts the older PascalCase keys (`Create`, `UpdateOld`, `UpdateNew`, `Delete`).
 
 ## Troubleshooting
 

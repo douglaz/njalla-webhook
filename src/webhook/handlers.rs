@@ -142,9 +142,8 @@ impl WebhookHandler {
     pub async fn apply_changes(
         &self,
         Json(request): Json<ApplyChangesRequest>,
-    ) -> Result<Json<ApplyChangesResponse>> {
+    ) -> Result<StatusCode> {
         let changes = request.into_changes();
-
         info!(
             "Applying changes: {} creates, {} updates, {} deletes",
             changes.create.len(),
@@ -177,9 +176,8 @@ impl WebhookHandler {
         }
 
         if changes.is_empty() {
-            return Ok(Json(ApplyChangesResponse {
-                message: "No changes to apply".to_string(),
-            }));
+            info!("No changes to apply");
+            return Ok(StatusCode::NO_CONTENT);
         }
 
         let mut applied_count = 0;
@@ -222,18 +220,18 @@ impl WebhookHandler {
             )));
         }
 
-        let message = if errors.is_empty() {
-            format!("Successfully applied {} changes", applied_count)
+        if errors.is_empty() {
+            info!("Successfully applied {} changes", applied_count);
         } else {
-            format!(
+            error!(
                 "Applied {} changes with {} errors: {:?}",
                 applied_count,
                 errors.len(),
                 errors
-            )
-        };
+            );
+        }
 
-        Ok(Json(ApplyChangesResponse { message }))
+        Ok(StatusCode::NO_CONTENT)
     }
 
     pub async fn adjust_endpoints(
@@ -361,5 +359,47 @@ impl WebhookHandler {
         } else {
             dns_name.to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn test_handler() -> WebhookHandler {
+        let config = Config {
+            njalla_api_token: "dummy-token".to_string(),
+            webhook_host: "127.0.0.1".to_string(),
+            webhook_port: 8888,
+            domain_filter: Some(vec!["example.com".to_string()]),
+            dry_run: true,
+            cache_ttl_seconds: 60,
+        };
+
+        let client = Arc::new(NjallaClient::new("dummy-token").expect("client should build"));
+        WebhookHandler::new(client, config)
+    }
+
+    #[tokio::test]
+    async fn apply_changes_accepts_external_dns_payload_and_returns_no_content() {
+        let handler = test_handler();
+        let request: ApplyChangesRequest = serde_json::from_value(json!({
+            "create": [
+                {
+                    "dnsName": "app.example.com",
+                    "targets": ["192.0.2.10"],
+                    "recordType": "A"
+                }
+            ]
+        }))
+        .expect("payload should deserialize");
+
+        let status = handler
+            .apply_changes(Json(request))
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(status, StatusCode::NO_CONTENT);
     }
 }
