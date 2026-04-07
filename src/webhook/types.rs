@@ -38,15 +38,16 @@ pub struct ProviderSpecific {
     pub value: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct Changes {
-    #[serde(rename = "Create", default)]
+    #[serde(default, alias = "Create")]
     pub create: Vec<Endpoint>,
-    #[serde(rename = "UpdateOld", default)]
+    #[serde(default, alias = "UpdateOld")]
     pub update_old: Vec<Endpoint>,
-    #[serde(rename = "UpdateNew", default)]
+    #[serde(default, alias = "UpdateNew")]
     pub update_new: Vec<Endpoint>,
-    #[serde(rename = "Delete", default)]
+    #[serde(default, alias = "Delete")]
     pub delete: Vec<Endpoint>,
 }
 
@@ -67,10 +68,13 @@ pub struct GetRecordsResponse {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum ApplyChangesRequest {
-    // External-DNS sends changes directly at root level
+    // Prefer wrapped requests first so Serde does not eagerly accept them as an empty Direct request.
+    Wrapped {
+        #[serde(rename = "changes", alias = "Changes")]
+        changes: Changes,
+    },
+    // External-DNS sends changes directly at the root level.
     Direct(Changes),
-    // But we'll also support wrapped format for compatibility
-    Wrapped { changes: Changes },
 }
 
 impl ApplyChangesRequest {
@@ -80,11 +84,6 @@ impl ApplyChangesRequest {
             ApplyChangesRequest::Wrapped { changes } => changes,
         }
     }
-}
-
-#[derive(Debug, Serialize)]
-pub struct ApplyChangesResponse {
-    pub message: String,
 }
 
 #[allow(dead_code)]
@@ -155,5 +154,70 @@ impl Changes {
             && self.update_old.is_empty()
             && self.update_new.is_empty()
             && self.delete.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_endpoint(name: &str) -> serde_json::Value {
+        json!({
+            "dnsName": name,
+            "targets": ["192.0.2.10"],
+            "recordType": "A"
+        })
+    }
+
+    #[test]
+    fn deserializes_external_dns_lower_camel_case_changes() {
+        let request: ApplyChangesRequest = serde_json::from_value(json!({
+            "create": [sample_endpoint("new.example.com")],
+            "updateOld": [sample_endpoint("old.example.com")],
+            "updateNew": [sample_endpoint("newer.example.com")],
+            "delete": [sample_endpoint("delete.example.com")]
+        }))
+        .expect("lowerCamelCase payload should deserialize");
+
+        let changes = request.into_changes();
+
+        assert_eq!(changes.create.len(), 1);
+        assert_eq!(changes.update_old.len(), 1);
+        assert_eq!(changes.update_new.len(), 1);
+        assert_eq!(changes.delete.len(), 1);
+        assert_eq!(changes.create[0].dns_name, "new.example.com");
+    }
+
+    #[test]
+    fn deserializes_legacy_pascal_case_changes() {
+        let request: ApplyChangesRequest = serde_json::from_value(json!({
+            "Create": [sample_endpoint("new.example.com")],
+            "UpdateOld": [sample_endpoint("old.example.com")],
+            "UpdateNew": [sample_endpoint("newer.example.com")],
+            "Delete": [sample_endpoint("delete.example.com")]
+        }))
+        .expect("PascalCase payload should deserialize");
+
+        let changes = request.into_changes();
+
+        assert_eq!(changes.create.len(), 1);
+        assert_eq!(changes.update_old.len(), 1);
+        assert_eq!(changes.update_new.len(), 1);
+        assert_eq!(changes.delete.len(), 1);
+    }
+
+    #[test]
+    fn deserializes_wrapped_changes_payload() {
+        let request: ApplyChangesRequest = serde_json::from_value(json!({
+            "changes": {
+                "create": [sample_endpoint("wrapped.example.com")]
+            }
+        }))
+        .expect("wrapped payload should deserialize");
+
+        let changes = request.into_changes();
+        assert_eq!(changes.create.len(), 1);
+        assert_eq!(changes.create[0].dns_name, "wrapped.example.com");
     }
 }
