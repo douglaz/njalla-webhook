@@ -1,4 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 
 // JSON-RPC 2.0 types
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,11 +74,8 @@ pub struct RemoveRecordRequest {
 
 impl JsonRpcRequest {
     pub fn new(method: &str, params: serde_json::Value) -> Self {
-        static mut REQUEST_ID: u32 = 0;
-        let id = unsafe {
-            REQUEST_ID += 1;
-            REQUEST_ID
-        };
+        // Wraps on u32 overflow; acceptable per spec
+        let id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
 
         Self {
             jsonrpc: "2.0".to_string(),
@@ -83,5 +83,55 @@ impl JsonRpcRequest {
             params,
             id,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn sequential_unique_ids() {
+        let ids: Vec<u32> = (0..100)
+            .map(|_| JsonRpcRequest::new("test", serde_json::json!({})).id)
+            .collect();
+        // All IDs must be nonzero (counter starts at 1, not 0)
+        assert!(
+            ids.iter().all(|&id| id >= 1),
+            "All IDs must be >= 1; got a zero ID"
+        );
+        // All IDs must be unique
+        let unique: HashSet<u32> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), 100);
+        // IDs must be strictly monotonically increasing
+        for pair in ids.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "IDs not monotonic: {} >= {}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_unique_ids() {
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(100));
+        let handles: Vec<_> = (0..100)
+            .map(|_| {
+                let b = barrier.clone();
+                tokio::spawn(async move {
+                    b.wait().await;
+                    JsonRpcRequest::new("test", serde_json::json!({})).id
+                })
+            })
+            .collect();
+
+        let mut ids = HashSet::new();
+        for handle in handles {
+            ids.insert(handle.await.unwrap());
+        }
+        assert_eq!(ids.len(), 100);
     }
 }
