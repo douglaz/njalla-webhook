@@ -1,4 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 
 // JSON-RPC 2.0 types
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,11 +74,7 @@ pub struct RemoveRecordRequest {
 
 impl JsonRpcRequest {
     pub fn new(method: &str, params: serde_json::Value) -> Self {
-        static mut REQUEST_ID: u32 = 0;
-        let id = unsafe {
-            REQUEST_ID += 1;
-            REQUEST_ID
-        };
+        let id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
 
         Self {
             jsonrpc: "2.0".to_string(),
@@ -83,5 +82,32 @@ impl JsonRpcRequest {
             params,
             id,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn sequential_unique_ids() {
+        let ids: HashSet<u32> = (0..100)
+            .map(|_| JsonRpcRequest::new("test", serde_json::json!({})).id)
+            .collect();
+        assert_eq!(ids.len(), 100);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_unique_ids() {
+        let handles: Vec<_> = (0..100)
+            .map(|_| tokio::spawn(async { JsonRpcRequest::new("test", serde_json::json!({})).id }))
+            .collect();
+
+        let mut ids = HashSet::new();
+        for handle in handles {
+            ids.insert(handle.await.unwrap());
+        }
+        assert_eq!(ids.len(), 100);
     }
 }
