@@ -74,6 +74,7 @@ pub struct RemoveRecordRequest {
 
 impl JsonRpcRequest {
     pub fn new(method: &str, params: serde_json::Value) -> Self {
+        // Wraps on u32 overflow; acceptable per spec
         let id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
 
         Self {
@@ -92,10 +93,21 @@ mod tests {
 
     #[test]
     fn sequential_unique_ids() {
-        let ids: HashSet<u32> = (0..100)
+        let ids: Vec<u32> = (0..100)
             .map(|_| JsonRpcRequest::new("test", serde_json::json!({})).id)
             .collect();
-        assert_eq!(ids.len(), 100);
+        // All IDs must be unique
+        let unique: HashSet<u32> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), 100);
+        // IDs must be strictly monotonically increasing
+        for pair in ids.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "IDs not monotonic: {} >= {}",
+                pair[0],
+                pair[1]
+            );
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
