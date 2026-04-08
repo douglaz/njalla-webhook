@@ -77,12 +77,7 @@ mod tests {
             njalla_api_token: String::new(),
             webhook_host: String::new(),
             webhook_port: 8888,
-            domain_filter: Some(
-                domains
-                    .into_iter()
-                    .map(|d| Config::normalize_domain(d))
-                    .collect(),
-            ),
+            domain_filter: Some(domains.into_iter().map(Config::normalize_domain).collect()),
             dry_run: false,
             cache_ttl_seconds: 60,
         }
