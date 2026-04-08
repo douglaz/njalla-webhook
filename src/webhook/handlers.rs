@@ -231,6 +231,7 @@ impl WebhookHandler {
             );
         }
 
+        // NOTE: partial failures still return NO_CONTENT (br-nyy.2)
         Ok(StatusCode::NO_CONTENT)
     }
 
@@ -326,17 +327,24 @@ impl WebhookHandler {
     }
 
     fn extract_zone(&self, dns_name: &str) -> Result<String> {
+        // Normalize dns_name; filter entries are already canonical from Config::from_env
+        let normalized_name = dns_name
+            .strip_suffix('.')
+            .unwrap_or(dns_name)
+            .to_ascii_lowercase();
+
         // Find the zone by checking against configured domains
         if let Some(ref domains) = self.config.domain_filter {
             for domain in domains {
-                if dns_name == domain || dns_name.ends_with(&format!(".{}", domain)) {
+                if normalized_name == *domain || normalized_name.ends_with(&format!(".{}", domain))
+                {
                     return Ok(domain.clone());
                 }
             }
         }
 
         // Fall back to extracting last two parts as zone
-        let parts: Vec<&str> = dns_name.split('.').collect();
+        let parts: Vec<&str> = normalized_name.split('.').collect();
         if parts.len() >= 2 {
             Ok(format!(
                 "{}.{}",
@@ -352,12 +360,17 @@ impl WebhookHandler {
     }
 
     fn extract_record_name(&self, dns_name: &str, zone: &str) -> String {
-        if dns_name == zone {
+        // Normalize dns_name to match the canonical zone returned by extract_zone
+        let normalized = dns_name
+            .strip_suffix('.')
+            .unwrap_or(dns_name)
+            .to_ascii_lowercase();
+        if normalized == zone {
             "".to_string()
-        } else if dns_name.ends_with(&format!(".{}", zone)) {
-            dns_name[..dns_name.len() - zone.len() - 1].to_string()
+        } else if normalized.ends_with(&format!(".{}", zone)) {
+            normalized[..normalized.len() - zone.len() - 1].to_string()
         } else {
-            dns_name.to_string()
+            normalized
         }
     }
 }
@@ -372,13 +385,90 @@ mod tests {
             njalla_api_token: "dummy-token".to_string(),
             webhook_host: "127.0.0.1".to_string(),
             webhook_port: 8888,
-            domain_filter: Some(vec!["example.com".to_string()]),
+            domain_filter: Some(vec![Config::normalize_domain("example.com")]),
             dry_run: true,
             cache_ttl_seconds: 60,
         };
 
         let client = Arc::new(NjallaClient::new("dummy-token").expect("client should build"));
         WebhookHandler::new(client, config)
+    }
+
+    fn handler_with_filter(domains: Vec<&str>) -> WebhookHandler {
+        let config = Config {
+            njalla_api_token: "dummy-token".to_string(),
+            webhook_host: "127.0.0.1".to_string(),
+            webhook_port: 8888,
+            domain_filter: Some(
+                domains
+                    .into_iter()
+                    .map(|d| Config::normalize_domain(d))
+                    .collect(),
+            ),
+            dry_run: true,
+            cache_ttl_seconds: 60,
+        };
+        let client = Arc::new(NjallaClient::new("dummy-token").expect("client should build"));
+        WebhookHandler::new(client, config)
+    }
+
+    #[test]
+    fn extract_zone_returns_canonical_zone() {
+        let handler = test_handler();
+        let zone = handler.extract_zone("www.example.com").unwrap();
+        assert_eq!(zone, "example.com");
+    }
+
+    #[test]
+    fn extract_zone_mixed_case_filter() {
+        let handler = handler_with_filter(vec!["Example.COM"]);
+        let zone = handler.extract_zone("www.example.com").unwrap();
+        assert_eq!(zone, "example.com");
+    }
+
+    #[test]
+    fn extract_zone_trailing_dot_filter() {
+        let handler = handler_with_filter(vec!["example.com."]);
+        let zone = handler.extract_zone("www.example.com").unwrap();
+        assert_eq!(zone, "example.com");
+    }
+
+    #[test]
+    fn extract_zone_trailing_dot_dns_name() {
+        let handler = test_handler();
+        let zone = handler.extract_zone("www.example.com.").unwrap();
+        assert_eq!(zone, "example.com");
+    }
+
+    #[test]
+    fn extract_zone_fallback_strips_trailing_dot() {
+        let handler = handler_with_filter(vec!["other.com"]);
+        let zone = handler.extract_zone("www.fallback.org.").unwrap();
+        assert_eq!(zone, "fallback.org");
+    }
+
+    #[test]
+    fn extract_record_name_with_mixed_case() {
+        let handler = handler_with_filter(vec!["Example.COM"]);
+        let zone = handler.extract_zone("WWW.Example.COM").unwrap();
+        let name = handler.extract_record_name("WWW.Example.COM", &zone);
+        assert_eq!(name, "www");
+    }
+
+    #[test]
+    fn extract_record_name_with_trailing_dot() {
+        let handler = test_handler();
+        let zone = handler.extract_zone("app.example.com.").unwrap();
+        let name = handler.extract_record_name("app.example.com.", &zone);
+        assert_eq!(name, "app");
+    }
+
+    #[test]
+    fn extract_record_name_exact_zone_match() {
+        let handler = test_handler();
+        let zone = handler.extract_zone("example.com").unwrap();
+        let name = handler.extract_record_name("example.com", &zone);
+        assert_eq!(name, "");
     }
 
     #[tokio::test]
