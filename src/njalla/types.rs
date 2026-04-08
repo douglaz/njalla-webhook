@@ -96,6 +96,11 @@ mod tests {
         let ids: Vec<u32> = (0..100)
             .map(|_| JsonRpcRequest::new("test", serde_json::json!({})).id)
             .collect();
+        // All IDs must be nonzero (counter starts at 1, not 0)
+        assert!(
+            ids.iter().all(|&id| id >= 1),
+            "All IDs must be >= 1; got a zero ID"
+        );
         // All IDs must be unique
         let unique: HashSet<u32> = ids.iter().copied().collect();
         assert_eq!(unique.len(), 100);
@@ -108,6 +113,17 @@ mod tests {
                 pair[1]
             );
         }
+    }
+
+    #[test]
+    fn request_id_starts_at_one() {
+        // The counter must be initialized >= 1 so fetch_add never returns 0.
+        // Even after other tests have incremented it, it must remain >= 1.
+        let val = REQUEST_ID.load(Ordering::Relaxed);
+        assert!(
+            val >= 1,
+            "REQUEST_ID must be initialized to at least 1, got {val}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
