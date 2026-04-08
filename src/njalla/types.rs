@@ -112,8 +112,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_unique_ids() {
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(100));
         let handles: Vec<_> = (0..100)
-            .map(|_| tokio::spawn(async { JsonRpcRequest::new("test", serde_json::json!({})).id }))
+            .map(|_| {
+                let b = barrier.clone();
+                tokio::spawn(async move {
+                    b.wait().await;
+                    JsonRpcRequest::new("test", serde_json::json!({})).id
+                })
+            })
             .collect();
 
         let mut ids = HashSet::new();
