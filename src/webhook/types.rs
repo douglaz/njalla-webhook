@@ -41,14 +41,22 @@ pub struct ProviderSpecific {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Changes {
-    #[serde(default, alias = "Create")]
+    #[serde(default, alias = "Create", deserialize_with = "null_as_empty_vec")]
     pub create: Vec<Endpoint>,
-    #[serde(default, alias = "UpdateOld")]
+    #[serde(default, alias = "UpdateOld", deserialize_with = "null_as_empty_vec")]
     pub update_old: Vec<Endpoint>,
-    #[serde(default, alias = "UpdateNew")]
+    #[serde(default, alias = "UpdateNew", deserialize_with = "null_as_empty_vec")]
     pub update_new: Vec<Endpoint>,
-    #[serde(default, alias = "Delete")]
+    #[serde(default, alias = "Delete", deserialize_with = "null_as_empty_vec")]
     pub delete: Vec<Endpoint>,
+}
+
+fn null_as_empty_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Option::<Vec<T>>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
 }
 
 // Request/Response types for webhook API
@@ -204,6 +212,21 @@ mod tests {
         assert_eq!(changes.create.len(), 1);
         assert_eq!(changes.update_old.len(), 1);
         assert_eq!(changes.update_new.len(), 1);
+        assert_eq!(changes.delete.len(), 1);
+    }
+
+    #[test]
+    fn deserializes_null_create_as_empty_vec() {
+        let request: ApplyChangesRequest = serde_json::from_value(json!({
+            "Create": null,
+            "UpdateOld": [],
+            "UpdateNew": [],
+            "Delete": [sample_endpoint("delete.example.com")]
+        }))
+        .expect("null Create field should deserialize");
+
+        let changes = request.into_changes();
+        assert!(changes.create.is_empty());
         assert_eq!(changes.delete.len(), 1);
     }
 
