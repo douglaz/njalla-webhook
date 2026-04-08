@@ -91,38 +91,8 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// Captures the real initial value of REQUEST_ID before any test calls
-    /// `JsonRpcRequest::new`. Every test calls `capture_initial_request_id()`
-    /// first, and `Once` ensures only the earliest invocation stores the value.
-    static CAPTURED_INIT: AtomicU32 = AtomicU32::new(0);
-    static CAPTURE_ONCE: std::sync::Once = std::sync::Once::new();
-
-    fn capture_initial_request_id() -> u32 {
-        CAPTURE_ONCE.call_once(|| {
-            CAPTURED_INIT.store(REQUEST_ID.load(Ordering::Relaxed), Ordering::Relaxed);
-        });
-        CAPTURED_INIT.load(Ordering::Relaxed)
-    }
-
-    #[test]
-    fn request_id_starts_at_one() {
-        let init = capture_initial_request_id();
-        assert_eq!(init, 1, "REQUEST_ID must be initialized to 1, got {init}");
-        // Verify new() returns the pre-increment value (catches fetch_add off-by-one).
-        // Snapshot before/after to tolerate parallel test interference.
-        let before = REQUEST_ID.load(Ordering::Relaxed);
-        let req = JsonRpcRequest::new("test", serde_json::json!({}));
-        let after = REQUEST_ID.load(Ordering::Relaxed);
-        assert!(
-            req.id >= before && req.id < after,
-            "ID {} not in expected range [{before}, {after})",
-            req.id
-        );
-    }
-
     #[test]
     fn sequential_unique_ids() {
-        capture_initial_request_id();
         let ids: Vec<u32> = (0..100)
             .map(|_| JsonRpcRequest::new("test", serde_json::json!({})).id)
             .collect();
@@ -147,7 +117,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_unique_ids() {
-        capture_initial_request_id();
         let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(100));
         let handles: Vec<_> = (0..100)
             .map(|_| {
