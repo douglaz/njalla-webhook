@@ -108,6 +108,16 @@ mod tests {
     fn request_id_starts_at_one() {
         let init = capture_initial_request_id();
         assert_eq!(init, 1, "REQUEST_ID must be initialized to 1, got {init}");
+        // Verify new() returns the pre-increment value (catches fetch_add off-by-one).
+        // Snapshot before/after to tolerate parallel test interference.
+        let before = REQUEST_ID.load(Ordering::Relaxed);
+        let req = JsonRpcRequest::new("test", serde_json::json!({}));
+        let after = REQUEST_ID.load(Ordering::Relaxed);
+        assert!(
+            req.id >= before && req.id < after,
+            "ID {} not in expected range [{before}, {after})",
+            req.id
+        );
     }
 
     #[test]
