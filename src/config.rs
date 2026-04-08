@@ -27,7 +27,7 @@ impl Config {
 
         let domain_filter = env::var("DOMAIN_FILTER").ok().map(|s| {
             s.split(',')
-                .map(|d| d.trim().to_string())
+                .map(|d| Self::normalize_domain(d.trim()))
                 .filter(|d| !d.is_empty())
                 .collect()
         });
@@ -52,8 +52,100 @@ impl Config {
 
     pub fn is_domain_allowed(&self, domain: &str) -> bool {
         match &self.domain_filter {
-            Some(filter) => filter.iter().any(|d| domain.ends_with(d)),
+            Some(filter) => {
+                let domain = Self::normalize_domain(domain);
+                filter
+                    .iter()
+                    .any(|d| domain == *d || domain.ends_with(&format!(".{d}")))
+            }
             None => true,
         }
+    }
+
+    /// Canonicalize a domain name: strip trailing dot and lowercase.
+    pub(crate) fn normalize_domain(s: &str) -> String {
+        s.strip_suffix('.').unwrap_or(s).to_ascii_lowercase()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with_filter(domains: Vec<&str>) -> Config {
+        Config {
+            njalla_api_token: String::new(),
+            webhook_host: String::new(),
+            webhook_port: 8888,
+            domain_filter: Some(
+                domains
+                    .into_iter()
+                    .map(|d| Config::normalize_domain(d))
+                    .collect(),
+            ),
+            dry_run: false,
+            cache_ttl_seconds: 60,
+        }
+    }
+
+    #[test]
+    fn exact_match_is_allowed() {
+        let config = config_with_filter(vec!["example.com"]);
+        assert!(config.is_domain_allowed("example.com"));
+    }
+
+    #[test]
+    fn proper_subdomain_is_allowed() {
+        let config = config_with_filter(vec!["example.com"]);
+        assert!(config.is_domain_allowed("www.example.com"));
+    }
+
+    #[test]
+    fn nested_subdomain_is_allowed() {
+        let config = config_with_filter(vec!["example.com"]);
+        assert!(config.is_domain_allowed("sub.deep.example.com"));
+    }
+
+    #[test]
+    fn sibling_domain_is_rejected() {
+        let config = config_with_filter(vec!["example.com"]);
+        assert!(!config.is_domain_allowed("badexample.com"));
+    }
+
+    #[test]
+    fn another_sibling_domain_is_rejected() {
+        let config = config_with_filter(vec!["example.com"]);
+        assert!(!config.is_domain_allowed("notexample.com"));
+    }
+
+    #[test]
+    fn case_insensitive_match() {
+        let config = config_with_filter(vec!["example.com"]);
+        assert!(config.is_domain_allowed("WWW.Example.COM"));
+    }
+
+    #[test]
+    fn trailing_dot_on_domain() {
+        let config = config_with_filter(vec!["example.com"]);
+        assert!(config.is_domain_allowed("www.example.com."));
+    }
+
+    #[test]
+    fn trailing_dot_on_filter() {
+        let config = config_with_filter(vec!["example.com."]);
+        assert!(config.is_domain_allowed("www.example.com"));
+    }
+
+    #[test]
+    fn none_filter_allows_all() {
+        let config = Config {
+            njalla_api_token: String::new(),
+            webhook_host: String::new(),
+            webhook_port: 8888,
+            domain_filter: None,
+            dry_run: false,
+            cache_ttl_seconds: 60,
+        };
+        assert!(config.is_domain_allowed("anything.com"));
     }
 }
