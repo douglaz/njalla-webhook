@@ -213,15 +213,9 @@ impl WebhookHandler {
             }
         }
 
-        if !errors.is_empty() && applied_count == 0 {
-            return Err(Error::Internal(format!(
-                "All operations failed: {:?}",
-                errors
-            )));
-        }
-
         if errors.is_empty() {
             info!("Successfully applied {} changes", applied_count);
+            Ok(StatusCode::NO_CONTENT)
         } else {
             error!(
                 "Applied {} changes with {} errors: {:?}",
@@ -229,10 +223,13 @@ impl WebhookHandler {
                 errors.len(),
                 errors
             );
+            Err(Error::Internal(format!(
+                "Partial failure: {} succeeded, {} failed: {:?}",
+                applied_count,
+                errors.len(),
+                errors
+            )))
         }
-
-        // NOTE: partial failures still return NO_CONTENT (br-nyy.2)
-        Ok(StatusCode::NO_CONTENT)
     }
 
     pub async fn adjust_endpoints(
@@ -469,6 +466,82 @@ mod tests {
         let zone = handler.extract_zone("example.com").unwrap();
         let name = handler.extract_record_name("example.com", &zone);
         assert_eq!(name, "");
+    }
+
+    #[tokio::test]
+    async fn apply_changes_returns_error_on_partial_failure() {
+        let handler = test_handler();
+        let request: ApplyChangesRequest = serde_json::from_value(json!({
+            "create": [
+                {
+                    "dnsName": "app.example.com",
+                    "targets": ["192.0.2.10"],
+                    "recordType": "A"
+                },
+                {
+                    "dnsName": "app.blocked.com",
+                    "targets": ["192.0.2.11"],
+                    "recordType": "A"
+                }
+            ]
+        }))
+        .expect("payload should deserialize");
+
+        let err = handler
+            .apply_changes(Json(request))
+            .await
+            .expect_err("partial failure should return error");
+        assert!(
+            matches!(err, Error::Internal(_)),
+            "expected Error::Internal, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_changes_returns_no_content_on_empty_changes() {
+        let handler = test_handler();
+        let request: ApplyChangesRequest = serde_json::from_value(json!({
+            "create": [],
+            "updateOld": [],
+            "updateNew": [],
+            "delete": []
+        }))
+        .expect("payload should deserialize");
+
+        let status = handler
+            .apply_changes(Json(request))
+            .await
+            .expect("empty changes should succeed");
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn apply_changes_returns_error_when_all_operations_fail() {
+        let handler = test_handler();
+        let request: ApplyChangesRequest = serde_json::from_value(json!({
+            "create": [
+                {
+                    "dnsName": "app.blocked.com",
+                    "targets": ["192.0.2.10"],
+                    "recordType": "A"
+                },
+                {
+                    "dnsName": "app.other.com",
+                    "targets": ["192.0.2.11"],
+                    "recordType": "A"
+                }
+            ]
+        }))
+        .expect("payload should deserialize");
+
+        let err = handler
+            .apply_changes(Json(request))
+            .await
+            .expect_err("all-disallowed should return error");
+        assert!(
+            matches!(err, Error::Internal(_)),
+            "expected Error::Internal, got: {err:?}"
+        );
     }
 
     #[tokio::test]
