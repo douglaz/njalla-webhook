@@ -486,12 +486,7 @@ mod tests {
             njalla_api_token: "dummy-token".to_string(),
             webhook_host: "127.0.0.1".to_string(),
             webhook_port: 8888,
-            domain_filter: Some(
-                domains
-                    .into_iter()
-                    .map(|d| Config::normalize_domain(d))
-                    .collect(),
-            ),
+            domain_filter: Some(domains.into_iter().map(Config::normalize_domain).collect()),
             dry_run: true,
             cache_ttl_seconds: 60,
         };
