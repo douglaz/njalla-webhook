@@ -1,20 +1,23 @@
 use super::types::*;
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::njalla::{self, Client as NjallaClient};
+use crate::njalla::{self, Client as NjallaClient, Domain, DomainLister};
 use axum::{extract::Query, http::StatusCode, Json};
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
 pub struct WebhookHandler {
     njalla_client: Arc<NjallaClient>,
+    domain_lister: Arc<dyn DomainLister>,
     config: Config,
 }
 
 impl WebhookHandler {
     pub fn new(njalla_client: Arc<NjallaClient>, config: Config) -> Self {
+        let domain_lister = njalla_client.clone() as Arc<dyn DomainLister>;
         Self {
             njalla_client,
+            domain_lister,
             config,
         }
     }
@@ -180,12 +183,29 @@ impl WebhookHandler {
             return Ok(StatusCode::NO_CONTENT);
         }
 
+        // Pre-fetch owned domains once for the entire batch when no domain filter is set.
+        let owned_domains = if self.config.domain_filter.is_none() {
+            match self.domain_lister.list_domains().await {
+                Ok(domains) => Some(domains),
+                Err(e) => {
+                    tracing::warn!(
+                        "Pre-fetch of owned domains failed, will retry per-endpoint: {}",
+                        e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let owned_domains_ref = owned_domains.as_deref();
+
         let mut applied_count = 0;
         let mut errors = Vec::new();
 
         // Process deletions first
         for endpoint in &changes.delete {
-            if let Err(e) = self.delete_endpoint(endpoint).await {
+            if let Err(e) = self.delete_endpoint(endpoint, owned_domains_ref).await {
                 error!("Failed to delete endpoint {}: {}", endpoint.dns_name, e);
                 errors.push(format!("Delete {}: {}", endpoint.dns_name, e));
             } else {
@@ -195,7 +215,7 @@ impl WebhookHandler {
 
         // Process updates (delete old, create new)
         for (old, new) in changes.update_old.iter().zip(changes.update_new.iter()) {
-            if let Err(e) = self.update_endpoint(old, new).await {
+            if let Err(e) = self.update_endpoint(old, new, owned_domains_ref).await {
                 error!("Failed to update endpoint {}: {}", new.dns_name, e);
                 errors.push(format!("Update {}: {}", new.dns_name, e));
             } else {
@@ -205,7 +225,7 @@ impl WebhookHandler {
 
         // Process creations
         for endpoint in &changes.create {
-            if let Err(e) = self.create_endpoint(endpoint).await {
+            if let Err(e) = self.create_endpoint(endpoint, owned_domains_ref).await {
                 error!("Failed to create endpoint {}: {}", endpoint.dns_name, e);
                 errors.push(format!("Create {}: {}", endpoint.dns_name, e));
             } else {
@@ -243,8 +263,12 @@ impl WebhookHandler {
 
     // Helper methods for record operations
 
-    async fn create_endpoint(&self, endpoint: &Endpoint) -> Result<()> {
-        let zone = self.extract_zone(&endpoint.dns_name)?;
+    async fn create_endpoint(
+        &self,
+        endpoint: &Endpoint,
+        owned_domains: Option<&[Domain]>,
+    ) -> Result<()> {
+        let zone = self.extract_zone(&endpoint.dns_name, owned_domains).await?;
 
         if !self.config.is_domain_allowed(&zone) {
             return Err(Error::DomainNotAllowed(zone));
@@ -278,15 +302,24 @@ impl WebhookHandler {
         Ok(())
     }
 
-    async fn update_endpoint(&self, old: &Endpoint, new: &Endpoint) -> Result<()> {
+    async fn update_endpoint(
+        &self,
+        old: &Endpoint,
+        new: &Endpoint,
+        owned_domains: Option<&[Domain]>,
+    ) -> Result<()> {
         // For simplicity, delete old and create new
-        self.delete_endpoint(old).await?;
-        self.create_endpoint(new).await?;
+        self.delete_endpoint(old, owned_domains).await?;
+        self.create_endpoint(new, owned_domains).await?;
         Ok(())
     }
 
-    async fn delete_endpoint(&self, endpoint: &Endpoint) -> Result<()> {
-        let zone = self.extract_zone(&endpoint.dns_name)?;
+    async fn delete_endpoint(
+        &self,
+        endpoint: &Endpoint,
+        owned_domains: Option<&[Domain]>,
+    ) -> Result<()> {
+        let zone = self.extract_zone(&endpoint.dns_name, owned_domains).await?;
 
         if !self.config.is_domain_allowed(&zone) {
             return Err(Error::DomainNotAllowed(zone));
@@ -323,14 +356,18 @@ impl WebhookHandler {
         Ok(())
     }
 
-    fn extract_zone(&self, dns_name: &str) -> Result<String> {
+    async fn extract_zone(
+        &self,
+        dns_name: &str,
+        prefetched_domains: Option<&[Domain]>,
+    ) -> Result<String> {
         // Normalize dns_name; filter entries are already canonical from Config::from_env
         let normalized_name = dns_name
             .strip_suffix('.')
             .unwrap_or(dns_name)
             .to_ascii_lowercase();
 
-        // Find the zone by checking against configured domains
+        // Stage 1: DOMAIN_FILTER-set path — check configured domains
         if let Some(ref domains) = self.config.domain_filter {
             for domain in domains {
                 if normalized_name == *domain || normalized_name.ends_with(&format!(".{}", domain))
@@ -338,21 +375,54 @@ impl WebhookHandler {
                     return Ok(domain.clone());
                 }
             }
+
+            // Filter is set but no match — fall back to naive two-label derivation
+            let parts: Vec<&str> = normalized_name.split('.').collect();
+            if parts.len() >= 2 {
+                return Ok(format!(
+                    "{}.{}",
+                    parts[parts.len() - 2],
+                    parts[parts.len() - 1]
+                ));
+            } else {
+                return Err(Error::InvalidRequest(format!(
+                    "Cannot extract zone from {}",
+                    dns_name
+                )));
+            }
         }
 
-        // Fall back to extracting last two parts as zone
-        let parts: Vec<&str> = normalized_name.split('.').collect();
-        if parts.len() >= 2 {
-            Ok(format!(
-                "{}.{}",
-                parts[parts.len() - 2],
-                parts[parts.len() - 1]
-            ))
-        } else {
-            Err(Error::InvalidRequest(format!(
-                "Cannot extract zone from {}",
+        // Stage 2: No filter set — use pre-fetched domains or query Njalla
+        let fetched;
+        let owned_domains = match prefetched_domains {
+            Some(domains) => domains,
+            None => {
+                fetched = self.domain_lister.list_domains().await?;
+                &fetched
+            }
+        };
+
+        let mut best_match: Option<&str> = None;
+
+        for domain in owned_domains {
+            let d = &domain.name;
+            let d_lower = d.to_ascii_lowercase();
+            let is_match =
+                normalized_name == d_lower || normalized_name.ends_with(&format!(".{}", d_lower));
+            if is_match {
+                match best_match {
+                    Some(current) if d.len() <= current.len() => {}
+                    _ => best_match = Some(d.as_str()),
+                }
+            }
+        }
+
+        match best_match {
+            Some(zone) => Ok(zone.to_string()),
+            None => Err(Error::InvalidRequest(format!(
+                "No owned domain matches {}",
                 dns_name
-            )))
+            ))),
         }
     }
 
@@ -391,6 +461,26 @@ mod tests {
         WebhookHandler::new(client, config)
     }
 
+    struct MockDomainLister {
+        domains: Vec<Domain>,
+    }
+
+    #[async_trait::async_trait]
+    impl DomainLister for MockDomainLister {
+        async fn list_domains(&self) -> crate::error::Result<Vec<Domain>> {
+            Ok(self.domains.clone())
+        }
+    }
+
+    struct PanickingDomainLister;
+
+    #[async_trait::async_trait]
+    impl DomainLister for PanickingDomainLister {
+        async fn list_domains(&self) -> crate::error::Result<Vec<Domain>> {
+            panic!("list_domains should not be called when domain filter is set");
+        }
+    }
+
     fn handler_with_filter(domains: Vec<&str>) -> WebhookHandler {
         let config = Config {
             njalla_api_token: "dummy-token".to_string(),
@@ -409,63 +499,145 @@ mod tests {
         WebhookHandler::new(client, config)
     }
 
-    #[test]
-    fn extract_zone_returns_canonical_zone() {
+    fn handler_with_mock_domains(domains: Vec<&str>) -> WebhookHandler {
+        let config = Config {
+            njalla_api_token: "dummy-token".to_string(),
+            webhook_host: "127.0.0.1".to_string(),
+            webhook_port: 8888,
+            domain_filter: None,
+            dry_run: true,
+            cache_ttl_seconds: 60,
+        };
+
+        let mock_lister = Arc::new(MockDomainLister {
+            domains: domains
+                .into_iter()
+                .map(|name| Domain {
+                    name: name.to_string(),
+                    status: "active".to_string(),
+                    expiry: None,
+                })
+                .collect(),
+        });
+
+        let client = Arc::new(NjallaClient::new("dummy-token").expect("client should build"));
+        WebhookHandler {
+            njalla_client: client,
+            domain_lister: mock_lister,
+            config,
+        }
+    }
+
+    #[tokio::test]
+    async fn extract_zone_returns_canonical_zone() {
         let handler = test_handler();
-        let zone = handler.extract_zone("www.example.com").unwrap();
+        let zone = handler.extract_zone("www.example.com", None).await.unwrap();
         assert_eq!(zone, "example.com");
     }
 
-    #[test]
-    fn extract_zone_mixed_case_filter() {
+    #[tokio::test]
+    async fn extract_zone_mixed_case_filter() {
         let handler = handler_with_filter(vec!["Example.COM"]);
-        let zone = handler.extract_zone("www.example.com").unwrap();
+        let zone = handler.extract_zone("www.example.com", None).await.unwrap();
         assert_eq!(zone, "example.com");
     }
 
-    #[test]
-    fn extract_zone_trailing_dot_filter() {
+    #[tokio::test]
+    async fn extract_zone_trailing_dot_filter() {
         let handler = handler_with_filter(vec!["example.com."]);
-        let zone = handler.extract_zone("www.example.com").unwrap();
+        let zone = handler.extract_zone("www.example.com", None).await.unwrap();
         assert_eq!(zone, "example.com");
     }
 
-    #[test]
-    fn extract_zone_trailing_dot_dns_name() {
+    #[tokio::test]
+    async fn extract_zone_trailing_dot_dns_name() {
         let handler = test_handler();
-        let zone = handler.extract_zone("www.example.com.").unwrap();
+        let zone = handler
+            .extract_zone("www.example.com.", None)
+            .await
+            .unwrap();
         assert_eq!(zone, "example.com");
     }
 
-    #[test]
-    fn extract_zone_fallback_strips_trailing_dot() {
+    #[tokio::test]
+    async fn extract_zone_fallback_strips_trailing_dot() {
         let handler = handler_with_filter(vec!["other.com"]);
-        let zone = handler.extract_zone("www.fallback.org.").unwrap();
+        let zone = handler
+            .extract_zone("www.fallback.org.", None)
+            .await
+            .unwrap();
         assert_eq!(zone, "fallback.org");
     }
 
-    #[test]
-    fn extract_record_name_with_mixed_case() {
+    #[tokio::test]
+    async fn extract_record_name_with_mixed_case() {
         let handler = handler_with_filter(vec!["Example.COM"]);
-        let zone = handler.extract_zone("WWW.Example.COM").unwrap();
+        let zone = handler.extract_zone("WWW.Example.COM", None).await.unwrap();
         let name = handler.extract_record_name("WWW.Example.COM", &zone);
         assert_eq!(name, "www");
     }
 
-    #[test]
-    fn extract_record_name_with_trailing_dot() {
+    #[tokio::test]
+    async fn extract_record_name_with_trailing_dot() {
         let handler = test_handler();
-        let zone = handler.extract_zone("app.example.com.").unwrap();
+        let zone = handler
+            .extract_zone("app.example.com.", None)
+            .await
+            .unwrap();
         let name = handler.extract_record_name("app.example.com.", &zone);
         assert_eq!(name, "app");
     }
 
-    #[test]
-    fn extract_record_name_exact_zone_match() {
+    #[tokio::test]
+    async fn extract_record_name_exact_zone_match() {
         let handler = test_handler();
-        let zone = handler.extract_zone("example.com").unwrap();
+        let zone = handler.extract_zone("example.com", None).await.unwrap();
         let name = handler.extract_record_name("example.com", &zone);
         assert_eq!(name, "");
+    }
+
+    #[tokio::test]
+    async fn extract_zone_multi_label_tld_returns_longest_match() {
+        let handler = handler_with_mock_domains(vec!["co.uk", "example.co.uk"]);
+        let zone = handler
+            .extract_zone("app.example.co.uk", None)
+            .await
+            .unwrap();
+        assert_eq!(zone, "example.co.uk");
+    }
+
+    #[tokio::test]
+    async fn extract_zone_case_insensitive_match() {
+        let handler = handler_with_mock_domains(vec!["example.com"]);
+        let zone = handler.extract_zone("App.Example.COM", None).await.unwrap();
+        assert_eq!(zone, "example.com");
+    }
+
+    #[tokio::test]
+    async fn extract_zone_no_match_returns_error() {
+        let handler = handler_with_mock_domains(vec!["example.com"]);
+        let result = handler.extract_zone("unknown.org", None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn extract_zone_with_domain_filter_does_not_call_list_domains() {
+        let config = Config {
+            njalla_api_token: "dummy-token".to_string(),
+            webhook_host: "127.0.0.1".to_string(),
+            webhook_port: 8888,
+            domain_filter: Some(vec!["example.com".to_string()]),
+            dry_run: true,
+            cache_ttl_seconds: 60,
+        };
+        let client = Arc::new(NjallaClient::new("dummy-token").expect("client should build"));
+        let handler = WebhookHandler {
+            njalla_client: client,
+            domain_lister: Arc::new(PanickingDomainLister),
+            config,
+        };
+        let zone = handler.extract_zone("app.example.com", None).await.unwrap();
+        assert_eq!(zone, "example.com");
     }
 
     #[tokio::test]
