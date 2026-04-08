@@ -121,7 +121,7 @@
                 "org.opencontainers.image.licenses" = "MIT";
               };
               Healthcheck = {
-                Test = ["CMD" "${pkgs.coreutils}/bin/timeout" "5" "${pkgs.coreutils}/bin/sh" "-c" "echo -e 'GET /health HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' | ${pkgs.coreutils}/bin/nc 127.0.0.1 8888 | ${pkgs.coreutils}/bin/grep -q '200 OK'"];
+                Test = ["CMD" "/bin/wget" "--no-verbose" "--tries=1" "--spider" "http://localhost:8888/healthz"];
                 Interval = 30000000000; # 30 seconds in nanoseconds
                 Timeout = 5000000000;   # 5 seconds in nanoseconds
                 Retries = 3;
