@@ -90,9 +90,24 @@ impl JsonRpcRequest {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+    use std::sync::Mutex;
+
+    /// All tests that touch REQUEST_ID must hold this lock to prevent
+    /// interleaving with the reset in `request_id_starts_at_one`.
+    static COUNTER_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn request_id_starts_at_one() {
+        let _guard = COUNTER_LOCK.lock().unwrap();
+        // Reset to 1, generate one ID, assert it is exactly 1.
+        REQUEST_ID.store(1, Ordering::Relaxed);
+        let req = JsonRpcRequest::new("test", serde_json::json!({}));
+        assert_eq!(req.id, 1, "First ID must be 1");
+    }
 
     #[test]
     fn sequential_unique_ids() {
+        let _guard = COUNTER_LOCK.lock().unwrap();
         let ids: Vec<u32> = (0..100)
             .map(|_| JsonRpcRequest::new("test", serde_json::json!({})).id)
             .collect();
@@ -115,19 +130,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn request_id_starts_at_one() {
-        // The counter must be initialized >= 1 so fetch_add never returns 0.
-        // Even after other tests have incremented it, it must remain >= 1.
-        let val = REQUEST_ID.load(Ordering::Relaxed);
-        assert!(
-            val >= 1,
-            "REQUEST_ID must be initialized to at least 1, got {val}"
-        );
-    }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_unique_ids() {
+        let _guard = COUNTER_LOCK.lock().unwrap();
         let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(100));
         let handles: Vec<_> = (0..100)
             .map(|_| {
