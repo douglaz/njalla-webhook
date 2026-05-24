@@ -9,7 +9,7 @@ repository = "https://github.com/yourusername/njalla-webhook"
 
 [dependencies]
 # Web framework
-axum = "0.7"
+axum = "0.8"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace", "cors"] }
 hyper = "1.0"
