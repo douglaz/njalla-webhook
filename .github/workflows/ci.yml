@@ -218,7 +218,7 @@ jobs:
           git log --oneline --no-merges $(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")..HEAD >> RELEASE_NOTES.md || echo "First release" >> RELEASE_NOTES.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/njalla-webhook-${{ github.ref_name }}-x86_64-linux.tar.gz
