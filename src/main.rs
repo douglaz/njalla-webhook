@@ -33,7 +33,11 @@ async fn main() -> Result<()> {
     );
 
     // Create Njalla client
-    let njalla_client = njalla::Client::new(&config.njalla_api_token)?;
+    let njalla_client = njalla::Client::new(
+        &config.njalla_api_token,
+        config.njalla_max_retries,
+        std::time::Duration::from_millis(config.njalla_retry_base_ms),
+    )?;
 
     // Build the application
     let app = Router::new()
