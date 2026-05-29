@@ -455,9 +455,14 @@ mod tests {
             domain_filter: Some(vec![Config::normalize_domain("example.com")]),
             dry_run: true,
             cache_ttl_seconds: 60,
+            njalla_max_retries: 3,
+            njalla_retry_base_ms: 500,
         };
 
-        let client = Arc::new(NjallaClient::new("dummy-token").expect("client should build"));
+        let client = Arc::new(
+            NjallaClient::new("dummy-token", 0, std::time::Duration::from_millis(0))
+                .expect("client should build"),
+        );
         WebhookHandler::new(client, config)
     }
 
@@ -489,8 +494,13 @@ mod tests {
             domain_filter: Some(domains.into_iter().map(Config::normalize_domain).collect()),
             dry_run: true,
             cache_ttl_seconds: 60,
+            njalla_max_retries: 3,
+            njalla_retry_base_ms: 500,
         };
-        let client = Arc::new(NjallaClient::new("dummy-token").expect("client should build"));
+        let client = Arc::new(
+            NjallaClient::new("dummy-token", 0, std::time::Duration::from_millis(0))
+                .expect("client should build"),
+        );
         WebhookHandler::new(client, config)
     }
 
@@ -502,6 +512,8 @@ mod tests {
             domain_filter: None,
             dry_run: true,
             cache_ttl_seconds: 60,
+            njalla_max_retries: 3,
+            njalla_retry_base_ms: 500,
         };
 
         let mock_lister = Arc::new(MockDomainLister {
@@ -515,7 +527,10 @@ mod tests {
                 .collect(),
         });
 
-        let client = Arc::new(NjallaClient::new("dummy-token").expect("client should build"));
+        let client = Arc::new(
+            NjallaClient::new("dummy-token", 0, std::time::Duration::from_millis(0))
+                .expect("client should build"),
+        );
         WebhookHandler {
             njalla_client: client,
             domain_lister: mock_lister,
@@ -624,8 +639,13 @@ mod tests {
             domain_filter: Some(vec!["example.com".to_string()]),
             dry_run: true,
             cache_ttl_seconds: 60,
+            njalla_max_retries: 3,
+            njalla_retry_base_ms: 500,
         };
-        let client = Arc::new(NjallaClient::new("dummy-token").expect("client should build"));
+        let client = Arc::new(
+            NjallaClient::new("dummy-token", 0, std::time::Duration::from_millis(0))
+                .expect("client should build"),
+        );
         let handler = WebhookHandler {
             njalla_client: client,
             domain_lister: Arc::new(PanickingDomainLister),
