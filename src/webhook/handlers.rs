@@ -276,7 +276,43 @@ impl WebhookHandler {
 
         let name = self.extract_record_name(&endpoint.dns_name, &zone);
 
+        // Fetch existing records once so creation is idempotent. Njalla's
+        // `add-record` always appends a new record (there is no upsert and no
+        // uniqueness constraint), so a redundant CREATE — which external-dns
+        // emits whenever its view of current records is missing this entry
+        // (registry TXT format change, a transient list failure, a restart) —
+        // silently produces a duplicate. Repeated over many reconciliations
+        // this floods the zone with thousands of copies and eventually makes
+        // the authoritative nameservers fail to serve it (SERVFAIL).
+        // Skipped in dry-run, which must not touch the API at all.
+        let existing = if self.config.dry_run {
+            Vec::new()
+        } else {
+            self.njalla_client.list_records(&zone).await?
+        };
+
         for target in &endpoint.targets {
+            // Skip if an identical record (same name/type/content) already
+            // exists. Name normalization mirrors `delete_endpoint`.
+            let already_exists = existing.iter().any(|record| {
+                let record_name = if record.name.is_empty() || record.name == "@" {
+                    ""
+                } else {
+                    record.name.as_str()
+                };
+                record_name == name.as_str()
+                    && record.record_type == endpoint.record_type
+                    && record.content == *target
+            });
+
+            if already_exists {
+                info!(
+                    "Record already exists, skipping create: {} {} -> {}",
+                    endpoint.record_type, endpoint.dns_name, target
+                );
+                continue;
+            }
+
             let priority = endpoint
                 .provider_specific
                 .iter()
