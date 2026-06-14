@@ -33,7 +33,7 @@ anyhow = "1.0"
 thiserror = "2.0"
 
 # Configuration
-config = { version = "0.14", features = ["toml"] }
+config = { version = "0.15", features = ["toml"] }
 dotenvy = "0.15"
 
 # Utilities
