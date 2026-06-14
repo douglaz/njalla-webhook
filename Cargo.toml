@@ -37,7 +37,7 @@ config = { version = "0.14", features = ["toml"] }
 dotenvy = "0.15"
 
 # Utilities
-uuid = { version = "1.10", features = ["v4", "serde"] }
+uuid = { version = "1.23", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 once_cell = "1.19"
