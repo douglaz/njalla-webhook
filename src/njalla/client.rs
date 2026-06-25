@@ -7,6 +7,18 @@ use tracing::{debug, info};
 
 const NJALLA_API_URL: &str = "https://njal.la/api/1/";
 
+/// Njalla's API names the zone apex `@` (as in its web UI), but external-dns sends the
+/// bare zone as the DNS name and our extractor yields an empty record name there. Sending
+/// `name: ""` to `add-record` makes Njalla reject the call, which previously surfaced as a
+/// fatal 500 to external-dns. Map the empty apex name to `@` at the API boundary.
+fn njalla_record_name(name: &str) -> &str {
+    if name.is_empty() {
+        "@"
+    } else {
+        name
+    }
+}
+
 pub struct Client {
     http_client: HttpClient,
 }
@@ -106,7 +118,7 @@ impl Client {
         let params = json!({
             "domain": request.domain,
             "type": request.record_type,
-            "name": request.name,
+            "name": njalla_record_name(&request.name),
             "content": request.content,
             "ttl": request.ttl,
             "priority": request.priority,
@@ -155,5 +167,22 @@ impl Client {
             request.id, request.domain
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::njalla_record_name;
+
+    #[test]
+    fn apex_empty_name_becomes_at() {
+        // The zone apex (e.g. an A record for whathefolk.com itself) reaches us as "".
+        assert_eq!(njalla_record_name(""), "@");
+    }
+
+    #[test]
+    fn subdomain_name_is_unchanged() {
+        assert_eq!(njalla_record_name("www"), "www");
+        assert_eq!(njalla_record_name("_externaldns"), "_externaldns");
     }
 }
