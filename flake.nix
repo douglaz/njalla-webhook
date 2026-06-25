@@ -2,7 +2,10 @@
   description = "Njalla DNS webhook provider for external-dns";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # nixos-unstable-small tracks the same packages as nixos-unstable but
+    # advances faster; we need it for the importCargoLock fix that fetches
+    # crates from static.crates.io (crates.io/api now 403s the curl UA).
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable-small";
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay.url = "github:oxalica/rust-overlay";
   };

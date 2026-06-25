@@ -120,6 +120,8 @@ nix build
 | `DOMAIN_FILTER` | Comma-separated list of domains to manage | All domains | No |
 | `DRY_RUN` | Enable dry-run mode (log changes without applying) | `false` | No |
 | `CACHE_TTL_SECONDS` | DNS records cache TTL in seconds | `60` | No |
+| `NJALLA_MAX_RETRIES` | Retries for transient Njalla API failures (429, 5xx, network). Total attempts = retries + 1 | `3` | No |
+| `NJALLA_RETRY_BASE_MS` | Base delay (ms) for exponential backoff between retries (`base * 2^(retry-1)`, capped at 10s) | `500` | No |
 | `RUST_LOG` | Log level (trace, debug, info, warn, error) | `info` | No |
 
 ### Example .env file
@@ -132,6 +134,8 @@ DOMAIN_FILTER=example.com,example.org
 RUST_LOG=info
 DRY_RUN=false
 CACHE_TTL_SECONDS=60
+NJALLA_MAX_RETRIES=3
+NJALLA_RETRY_BASE_MS=500
 ```
 
 ## Kubernetes Deployment

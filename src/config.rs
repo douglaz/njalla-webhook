@@ -10,6 +10,11 @@ pub struct Config {
     pub domain_filter: Option<Vec<String>>,
     pub dry_run: bool,
     pub cache_ttl_seconds: u64,
+    /// Maximum number of retries for a transient Njalla API failure (rate
+    /// limits, 5xx, network errors). Total attempts = retries + 1.
+    pub njalla_max_retries: u32,
+    /// Base delay in milliseconds for the exponential backoff between retries.
+    pub njalla_retry_base_ms: u64,
 }
 
 impl Config {
@@ -40,6 +45,14 @@ impl Config {
             .unwrap_or_else(|_| "60".to_string())
             .parse::<u64>()?;
 
+        let njalla_max_retries = env::var("NJALLA_MAX_RETRIES")
+            .unwrap_or_else(|_| "3".to_string())
+            .parse::<u32>()?;
+
+        let njalla_retry_base_ms = env::var("NJALLA_RETRY_BASE_MS")
+            .unwrap_or_else(|_| "500".to_string())
+            .parse::<u64>()?;
+
         Ok(Config {
             njalla_api_token,
             webhook_host,
@@ -47,6 +60,8 @@ impl Config {
             domain_filter,
             dry_run,
             cache_ttl_seconds,
+            njalla_max_retries,
+            njalla_retry_base_ms,
         })
     }
 
@@ -80,6 +95,8 @@ mod tests {
             domain_filter: Some(domains.into_iter().map(Config::normalize_domain).collect()),
             dry_run: false,
             cache_ttl_seconds: 60,
+            njalla_max_retries: 3,
+            njalla_retry_base_ms: 500,
         }
     }
 
@@ -140,6 +157,8 @@ mod tests {
             domain_filter: None,
             dry_run: false,
             cache_ttl_seconds: 60,
+            njalla_max_retries: 3,
+            njalla_retry_base_ms: 500,
         };
         assert!(config.is_domain_allowed("anything.com"));
     }
