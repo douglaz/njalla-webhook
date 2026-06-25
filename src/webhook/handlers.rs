@@ -650,10 +650,7 @@ mod tests {
         // `api-example.com` is a real sibling apex, not an external-dns affix of `example.com`
         // (`api` isn't a record type), so it must resolve to itself — not to `example.com`.
         let handler = handler_with_filter(vec!["example.com", "api-example.com"]);
-        let zone = handler
-            .extract_zone("api-example.com", None)
-            .await
-            .unwrap();
+        let zone = handler.extract_zone("api-example.com", None).await.unwrap();
         assert_eq!(zone, "api-example.com");
     }
 
