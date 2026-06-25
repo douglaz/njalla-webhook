@@ -370,14 +370,12 @@ impl WebhookHandler {
         // Stage 1: DOMAIN_FILTER-set path — check configured domains
         if let Some(ref domains) = self.config.domain_filter {
             for domain in domains {
-                // `.{domain}` matches a normal subdomain. `-{domain}` matches external-dns's
+                // `.{domain}` matches a normal subdomain; `is_affixed_apex_of` matches external-dns's
                 // affixed registry TXT for an APEX record (e.g. `_externaldns.a-whathefolk.com`),
-                // where the `<type>-` marker fuses onto the zone's leftmost label and so breaks
-                // the dotted-suffix check. Njalla stores/returns such names verbatim, so the full
-                // name round-trips through extract_record_name + from_njalla_record.
+                // where the `<type>-` marker fuses onto the zone's leftmost label.
                 if normalized_name == *domain
                     || normalized_name.ends_with(&format!(".{domain}"))
-                    || normalized_name.ends_with(&format!("-{domain}"))
+                    || is_affixed_apex_of(&normalized_name, domain)
                 {
                     return Ok(domain.clone());
                 }
@@ -414,11 +412,10 @@ impl WebhookHandler {
         for domain in owned_domains {
             let d = &domain.name;
             let d_lower = d.to_ascii_lowercase();
-            // See the domain-filter branch above: `-{domain}` also matches the affixed apex
-            // registry-TXT shape (e.g. `_externaldns.a-whathefolk.com`).
+            // See the domain-filter branch above: also match the affixed apex registry-TXT shape.
             let is_match = normalized_name == d_lower
                 || normalized_name.ends_with(&format!(".{d_lower}"))
-                || normalized_name.ends_with(&format!("-{d_lower}"));
+                || is_affixed_apex_of(&normalized_name, &d_lower);
             if is_match {
                 match best_match {
                     Some(current) if d.len() <= current.len() => {}
@@ -450,6 +447,20 @@ impl WebhookHandler {
             normalized
         }
     }
+}
+
+/// True when `name` is external-dns's affixed registry TXT for the APEX of `zone` — i.e.
+/// `<prefix><type>-<zone>` (e.g. `_externaldns.a-whathefolk.com` for zone `whathefolk.com`). The
+/// `<type>-` record-type marker fuses onto the zone's leftmost label, so the normal `.{zone}`
+/// suffix check misses it. The match is constrained to a real DNS record-type marker so a sibling
+/// domain like `api-example.com` is NOT misclassified as belonging to `example.com`.
+fn is_affixed_apex_of(name: &str, zone: &str) -> bool {
+    const AFFIX_TYPES: &[&str] = &[
+        "a", "aaaa", "cname", "txt", "ns", "ptr", "srv", "mx", "naptr", "soa", "caa",
+    ];
+    name.strip_suffix(&format!("-{zone}"))
+        .map(|prefix| prefix.rsplit('.').next().unwrap_or(prefix))
+        .is_some_and(|marker| AFFIX_TYPES.contains(&marker))
 }
 
 #[cfg(test)]
@@ -581,6 +592,18 @@ mod tests {
         assert_eq!(zone, "whathefolk.com");
         let name = handler.extract_record_name("_externaldns.whathefolk.com", &zone);
         assert_eq!(name, "_externaldns");
+    }
+
+    #[tokio::test]
+    async fn extract_zone_sibling_domain_not_misclassified_as_affix() {
+        // `api-example.com` is a real sibling apex, not an external-dns affix of `example.com`
+        // (`api` isn't a record type), so it must resolve to itself — not to `example.com`.
+        let handler = handler_with_filter(vec!["example.com", "api-example.com"]);
+        let zone = handler
+            .extract_zone("api-example.com", None)
+            .await
+            .unwrap();
+        assert_eq!(zone, "api-example.com");
     }
 
     #[tokio::test]
