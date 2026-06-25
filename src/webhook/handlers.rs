@@ -406,7 +406,12 @@ impl WebhookHandler {
         // Stage 1: DOMAIN_FILTER-set path — check configured domains
         if let Some(ref domains) = self.config.domain_filter {
             for domain in domains {
-                if normalized_name == *domain || normalized_name.ends_with(&format!(".{}", domain))
+                // `.{domain}` matches a normal subdomain; `is_affixed_apex_of` matches external-dns's
+                // affixed registry TXT for an APEX record (e.g. `_externaldns.a-whathefolk.com`),
+                // where the `<type>-` marker fuses onto the zone's leftmost label.
+                if normalized_name == *domain
+                    || normalized_name.ends_with(&format!(".{domain}"))
+                    || is_affixed_apex_of(&normalized_name, domain)
                 {
                     return Ok(domain.clone());
                 }
@@ -443,8 +448,10 @@ impl WebhookHandler {
         for domain in owned_domains {
             let d = &domain.name;
             let d_lower = d.to_ascii_lowercase();
-            let is_match =
-                normalized_name == d_lower || normalized_name.ends_with(&format!(".{}", d_lower));
+            // See the domain-filter branch above: also match the affixed apex registry-TXT shape.
+            let is_match = normalized_name == d_lower
+                || normalized_name.ends_with(&format!(".{d_lower}"))
+                || is_affixed_apex_of(&normalized_name, &d_lower);
             if is_match {
                 match best_match {
                     Some(current) if d.len() <= current.len() => {}
@@ -476,6 +483,20 @@ impl WebhookHandler {
             normalized
         }
     }
+}
+
+/// True when `name` is external-dns's affixed registry TXT for the APEX of `zone` — i.e.
+/// `<prefix><type>-<zone>` (e.g. `_externaldns.a-whathefolk.com` for zone `whathefolk.com`). The
+/// `<type>-` record-type marker fuses onto the zone's leftmost label, so the normal `.{zone}`
+/// suffix check misses it. The match is constrained to a real DNS record-type marker so a sibling
+/// domain like `api-example.com` is NOT misclassified as belonging to `example.com`.
+fn is_affixed_apex_of(name: &str, zone: &str) -> bool {
+    const AFFIX_TYPES: &[&str] = &[
+        "a", "aaaa", "cname", "txt", "ns", "ptr", "srv", "mx", "naptr", "soa", "caa",
+    ];
+    name.strip_suffix(&format!("-{zone}"))
+        .map(|prefix| prefix.rsplit('.').next().unwrap_or(prefix))
+        .is_some_and(|marker| AFFIX_TYPES.contains(&marker))
 }
 
 #[cfg(test)]
@@ -593,6 +614,55 @@ mod tests {
         let handler = handler_with_filter(vec!["example.com."]);
         let zone = handler.extract_zone("www.example.com", None).await.unwrap();
         assert_eq!(zone, "example.com");
+    }
+
+    #[tokio::test]
+    async fn extract_zone_affixed_apex_registry_txt() {
+        // external-dns v0.14 writes a per-type ownership TXT for an apex record as
+        // `_externaldns.a-<zone>` (the `a-` marker fuses onto the zone's leftmost label, so the
+        // dotted-suffix check misses it). It must still resolve to the real zone, and the full
+        // name is kept as the record name (Njalla stores it verbatim, so it round-trips).
+        let handler = handler_with_filter(vec!["whathefolk.com"]);
+        let zone = handler
+            .extract_zone("_externaldns.a-whathefolk.com", None)
+            .await
+            .unwrap();
+        assert_eq!(zone, "whathefolk.com");
+        let name = handler.extract_record_name("_externaldns.a-whathefolk.com", &zone);
+        assert_eq!(name, "_externaldns.a-whathefolk.com");
+    }
+
+    #[tokio::test]
+    async fn extract_zone_old_format_apex_txt_still_resolves() {
+        // Regression: the old-format apex ownership TXT keeps resolving via the dotted suffix.
+        let handler = handler_with_filter(vec!["whathefolk.com"]);
+        let zone = handler
+            .extract_zone("_externaldns.whathefolk.com", None)
+            .await
+            .unwrap();
+        assert_eq!(zone, "whathefolk.com");
+        let name = handler.extract_record_name("_externaldns.whathefolk.com", &zone);
+        assert_eq!(name, "_externaldns");
+    }
+
+    #[tokio::test]
+    async fn extract_zone_sibling_domain_not_misclassified_as_affix() {
+        // `api-example.com` is a real sibling apex, not an external-dns affix of `example.com`
+        // (`api` isn't a record type), so it must resolve to itself — not to `example.com`.
+        let handler = handler_with_filter(vec!["example.com", "api-example.com"]);
+        let zone = handler.extract_zone("api-example.com", None).await.unwrap();
+        assert_eq!(zone, "api-example.com");
+    }
+
+    #[tokio::test]
+    async fn extract_zone_affixed_apex_via_owned_domains() {
+        // Same affix handling on the no-filter (owned-domains) path.
+        let handler = handler_with_mock_domains(vec!["whathefolk.com"]);
+        let zone = handler
+            .extract_zone("_externaldns.cname-whathefolk.com", None)
+            .await
+            .unwrap();
+        assert_eq!(zone, "whathefolk.com");
     }
 
     #[tokio::test]
