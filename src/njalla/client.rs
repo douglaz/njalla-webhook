@@ -94,11 +94,10 @@ impl Client {
     /// "apply changes" failure and crashes on — so absorbing transient blips
     /// here keeps the reconcile loop alive.
     ///
-    /// Note: mutating calls (add/remove-record) are retried as well. This is
-    /// safe in practice because external-dns already re-runs the entire change
-    /// batch on the next reconcile, so a retry is no worse than the existing
-    /// crash-and-retry behaviour, and the common transient case (a 429/5xx
-    /// where Njalla rejected the request outright) makes no change to retry.
+    /// Note: `add-record` does NOT use this blind retry — it is not idempotent, so it runs its
+    /// own retry loop that re-checks existence before re-sending (see [`Self::add_record`]).
+    /// `remove-record` and the read methods do use this path: reads are pure, and removing an
+    /// already-removed id is harmless, so a retry after an ambiguous failure can't duplicate state.
     async fn call_api<T>(&self, request: JsonRpcRequest) -> Result<T>
     where
         T: for<'de> serde::Deserialize<'de>,
@@ -229,23 +228,74 @@ impl Client {
     }
 
     pub async fn add_record(&self, request: AddRecordRequest) -> Result<DnsRecord> {
+        let name = njalla_record_name(&request.name);
         let params = json!({
             "domain": request.domain,
             "type": request.record_type,
-            "name": njalla_record_name(&request.name),
+            "name": name,
             "content": request.content,
             "ttl": request.ttl,
             "priority": request.priority,
         });
-
         let rpc_request = JsonRpcRequest::new("add-record", params);
-        let record: DnsRecord = self.call_api(rpc_request).await?;
 
-        info!(
-            "Added {} record {} -> {} for domain {}",
-            record.record_type, record.name, record.content, request.domain
-        );
-        Ok(record)
+        // Idempotent create. Njalla's add-record is NOT idempotent (it always appends), so we
+        // must NOT use the generic blind-retry: an *ambiguous* transient failure (network
+        // timeout, truncated 2xx, or a 5xx after Njalla already committed) could mean the record
+        // was created. Before each retry we re-check existence and, if a matching record is
+        // already present, treat the create as done — avoiding a duplicate record.
+        let mut retries = 0u32;
+        loop {
+            match self.attempt_call_api::<DnsRecord>(&rpc_request).await {
+                Ok(record) => {
+                    info!(
+                        "Added {} record {} -> {} for domain {}",
+                        record.record_type, record.name, record.content, request.domain
+                    );
+                    return Ok(record);
+                }
+                Err(AttemptError { error, retryable }) => {
+                    if retryable && retries < self.max_retries {
+                        if let Some(existing) = self.find_matching_record(&request, name).await {
+                            info!(
+                                "add-record for {} retried; matching {} record already exists — treating create as done",
+                                request.domain, request.record_type
+                            );
+                            return Ok(existing);
+                        }
+                        retries += 1;
+                        let delay = backoff_delay(self.retry_base, retries);
+                        warn!(
+                            "Njalla 'add-record' failed (attempt {}/{}): {} — retrying in {:?}",
+                            retries,
+                            self.max_retries + 1,
+                            error,
+                            delay
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    /// Find a record already matching an `add-record` request (same name/type/content). Used to
+    /// make [`Self::add_record`] idempotent across retries: after an ambiguous failure the create
+    /// may have committed, so we look before re-sending. Returns `None` on any lookup failure, so
+    /// the caller falls back to retrying the create (no worse than the prior blind-retry).
+    async fn find_matching_record(
+        &self,
+        request: &AddRecordRequest,
+        sent_name: &str,
+    ) -> Option<DnsRecord> {
+        let records = self.list_records(&request.domain).await.ok()?;
+        records.into_iter().find(|r| {
+            r.name == sent_name
+                && r.record_type == request.record_type
+                && r.content == request.content
+        })
     }
 
     #[allow(dead_code)]
@@ -430,5 +480,53 @@ mod tests {
 
         assert!(result.is_err(), "application error must surface");
         app_error.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn add_record_is_idempotent_after_ambiguous_failure() {
+        let mut server = mockito::Server::new_async().await;
+        // add-record's first attempt fails transiently — but Njalla may already have committed it.
+        let add_attempt = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(
+                json!({"method": "add-record"}),
+            ))
+            .with_status(503)
+            .with_body("unavailable")
+            .expect(1)
+            .create_async()
+            .await;
+        // The re-check finds the record already present, so NO second create is sent.
+        let list_check = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(
+                json!({"method": "list-records"}),
+            ))
+            .with_status(200)
+            .with_body(
+                r#"{"jsonrpc":"2.0","result":{"records":[{"id":"99","name":"www","type":"A","content":"1.2.3.4","ttl":300}]},"id":1}"#,
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let client = test_client(&server, 3);
+        let req = AddRecordRequest {
+            domain: "example.com".to_string(),
+            name: "www".to_string(),
+            record_type: "A".to_string(),
+            content: "1.2.3.4".to_string(),
+            ttl: 300,
+            priority: None,
+        };
+        let record = client
+            .add_record(req)
+            .await
+            .expect("idempotent create should resolve to the existing record");
+
+        // Returned the existing record instead of creating a duplicate.
+        assert_eq!(record.id, "99");
+        add_attempt.assert_async().await; // add-record sent exactly once (not re-sent)
+        list_check.assert_async().await; // existence was re-checked before any retry
     }
 }

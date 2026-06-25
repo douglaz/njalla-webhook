@@ -405,16 +405,26 @@ impl WebhookHandler {
 
         // Stage 1: DOMAIN_FILTER-set path — check configured domains
         if let Some(ref domains) = self.config.domain_filter {
-            for domain in domains {
-                // `.{domain}` matches a normal subdomain; `is_affixed_apex_of` matches external-dns's
-                // affixed registry TXT for an APEX record (e.g. `_externaldns.a-whathefolk.com`),
-                // where the `<type>-` marker fuses onto the zone's leftmost label.
-                if normalized_name == *domain
-                    || normalized_name.ends_with(&format!(".{domain}"))
-                    || is_affixed_apex_of(&normalized_name, domain)
-                {
-                    return Ok(domain.clone());
-                }
+            // Prefer a real exact/subdomain match (longest wins) over external-dns's affixed
+            // apex registry-TXT shape (`_externaldns.a-<zone>`). Otherwise a real host whose
+            // leftmost label starts with a record-type token (e.g. `a-example.com`, or
+            // `cname-foo.example.com`) could be misread as the affix of a shorter sibling zone.
+            if let Some(domain) = domains
+                .iter()
+                .filter(|d| {
+                    let d = d.as_str();
+                    normalized_name == d || normalized_name.ends_with(&format!(".{d}"))
+                })
+                .max_by_key(|d| d.len())
+            {
+                return Ok(domain.clone());
+            }
+            if let Some(domain) = domains
+                .iter()
+                .filter(|d| is_affixed_apex_of(&normalized_name, d))
+                .max_by_key(|d| d.len())
+            {
+                return Ok(domain.clone());
             }
 
             // Filter is set but no match — fall back to naive two-label derivation
@@ -443,28 +453,28 @@ impl WebhookHandler {
             }
         };
 
-        let mut best_match: Option<&str> = None;
+        // Prefer an exact/subdomain match (longest), then the affixed-apex shape — same
+        // preference as the filter path above, so a sibling isn't misread as an affix.
+        let best = owned_domains
+            .iter()
+            .filter(|dom| {
+                let d = dom.name.to_ascii_lowercase();
+                normalized_name == d || normalized_name.ends_with(&format!(".{d}"))
+            })
+            .max_by_key(|dom| dom.name.len())
+            .or_else(|| {
+                owned_domains
+                    .iter()
+                    .filter(|dom| {
+                        is_affixed_apex_of(&normalized_name, &dom.name.to_ascii_lowercase())
+                    })
+                    .max_by_key(|dom| dom.name.len())
+            });
 
-        for domain in owned_domains {
-            let d = &domain.name;
-            let d_lower = d.to_ascii_lowercase();
-            // See the domain-filter branch above: also match the affixed apex registry-TXT shape.
-            let is_match = normalized_name == d_lower
-                || normalized_name.ends_with(&format!(".{d_lower}"))
-                || is_affixed_apex_of(&normalized_name, &d_lower);
-            if is_match {
-                match best_match {
-                    Some(current) if d.len() <= current.len() => {}
-                    _ => best_match = Some(d.as_str()),
-                }
-            }
-        }
-
-        match best_match {
-            Some(zone) => Ok(zone.to_string()),
+        match best {
+            Some(dom) => Ok(dom.name.clone()),
             None => Err(Error::InvalidRequest(format!(
-                "No owned domain matches {}",
-                dns_name
+                "No owned domain matches {dns_name}"
             ))),
         }
     }
@@ -652,6 +662,27 @@ mod tests {
         let handler = handler_with_filter(vec!["example.com", "api-example.com"]);
         let zone = handler.extract_zone("api-example.com", None).await.unwrap();
         assert_eq!(zone, "api-example.com");
+    }
+
+    #[tokio::test]
+    async fn extract_zone_prefers_exact_sibling_over_affix() {
+        // `a-example.com` is its own registered zone. Even though `a` IS a record-type marker
+        // and `example.com` is listed FIRST, the exact match must win over the affix reading.
+        let handler = handler_with_filter(vec!["example.com", "a-example.com"]);
+        let zone = handler.extract_zone("a-example.com", None).await.unwrap();
+        assert_eq!(zone, "a-example.com");
+    }
+
+    #[tokio::test]
+    async fn extract_zone_subdomain_with_type_like_label() {
+        // A real subdomain whose leftmost label starts with a record-type token must resolve
+        // to its parent zone (a dotted-suffix match), not be misread as an apex affix.
+        let handler = handler_with_filter(vec!["example.com"]);
+        let zone = handler
+            .extract_zone("cname-foo.example.com", None)
+            .await
+            .unwrap();
+        assert_eq!(zone, "example.com");
     }
 
     #[tokio::test]
