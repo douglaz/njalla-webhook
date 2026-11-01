@@ -3,7 +3,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::njalla::{self, Client as NjallaClient, Domain, DomainLister};
 use axum::{extract::Query, http::StatusCode, Json};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tracing::{debug, error, info};
 
 pub struct WebhookHandler {
@@ -58,6 +58,26 @@ impl WebhookHandler {
     }
 
     pub async fn get_records(&self, query: Query<GetRecordsQuery>) -> Result<Json<Vec<Endpoint>>> {
+        let fetch = self.fetch_records(query);
+        let timeout_secs = self.config.get_records_timeout_secs;
+        if timeout_secs == 0 {
+            return fetch.await;
+        }
+
+        tokio::time::timeout(Duration::from_secs(timeout_secs), fetch)
+            .await
+            .map_err(|_| {
+                error!(
+                    "GET /records exceeded its deadline of {} seconds",
+                    timeout_secs
+                );
+                Error::GatewayTimeout(format!(
+                    "GET /records exceeded its deadline of {timeout_secs} seconds"
+                ))
+            })?
+    }
+
+    async fn fetch_records(&self, query: Query<GetRecordsQuery>) -> Result<Json<Vec<Endpoint>>> {
         // If zone_name is provided, get records for that specific zone
         if let Some(zone_name) = query.zone_name.as_ref() {
             info!("Getting records for zone: {}", zone_name);
@@ -132,7 +152,9 @@ impl WebhookHandler {
                     }
                     Err(e) => {
                         error!("Failed to fetch records for domain {}: {}", domain, e);
-                        // Continue with other domains even if one fails
+                        return Err(Error::ServiceUnavailable(format!(
+                            "Failed to fetch records for domain {domain}: {e}"
+                        )));
                     }
                 }
             }
@@ -511,7 +533,363 @@ fn is_affixed_apex_of(name: &str, zone: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::Request,
+        response::Response,
+        Router,
+    };
     use serde_json::json;
+    use tower::ServiceExt;
+    use wiremock::{
+        matchers::{body_partial_json, method},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    fn mock_router(
+        server: &MockServer,
+        domain_filter: Option<Vec<&str>>,
+        timeout_secs: u64,
+    ) -> Router {
+        let config = Config {
+            njalla_api_token: "dummy-token".to_string(),
+            webhook_host: "127.0.0.1".to_string(),
+            webhook_port: 8888,
+            domain_filter: domain_filter
+                .map(|domains| domains.into_iter().map(Config::normalize_domain).collect()),
+            dry_run: false,
+            cache_ttl_seconds: 60,
+            get_records_timeout_secs: timeout_secs,
+            njalla_max_retries: 2,
+            njalla_retry_base_ms: 1,
+        };
+        let client = NjallaClient::with_api_url(
+            "dummy-token",
+            config.njalla_max_retries,
+            Duration::from_millis(config.njalla_retry_base_ms),
+            &server.uri(),
+        )
+        .unwrap();
+        crate::webhook::routes::create_routes(client, config)
+    }
+
+    fn rpc_result(result: serde_json::Value) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0", "result": result, "id": 1
+        }))
+    }
+
+    fn records_mock(domain: &str, response: ResponseTemplate) -> Mock {
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({
+                "method": "list-records", "params": {"domain": domain}
+            })))
+            .respond_with(response)
+    }
+
+    async fn response_json(response: Response) -> (StatusCode, serde_json::Value) {
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    async fn get_json(router: Router, uri: &str) -> (StatusCode, serde_json::Value) {
+        let response = router
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        response_json(response).await
+    }
+
+    fn assert_error(status: StatusCode, body: &serde_json::Value, expected: StatusCode) {
+        assert_eq!(status, expected, "unexpected response: {body}");
+        assert!(body.is_object(), "expected an error object: {body}");
+        assert!(body["error"].is_string(), "missing error message: {body}");
+        assert_eq!(body["status"], expected.as_u16());
+    }
+
+    #[tokio::test]
+    async fn get_records_stops_after_persistent_domain_failure() {
+        for use_filter in [true, false] {
+            let server = MockServer::start().await;
+            let domains = vec!["first.com", "failing.com", "last.com"];
+            Mock::given(body_partial_json(json!({"method": "list-domains"})))
+                .respond_with(rpc_result(json!({"domains": domains.iter().map(|name| {
+                    json!({"name": name, "status": "active"})
+                }).collect::<Vec<_>>()})))
+                .expect(if use_filter { 0 } else { 1 })
+                .mount(&server)
+                .await;
+            records_mock(
+                "first.com",
+                rpc_result(json!({"records": [{
+                    "id": "1", "name": "@", "type": "A", "content": "192.0.2.1"
+                }]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+            records_mock("failing.com", ResponseTemplate::new(500))
+                .expect(3)
+                .mount(&server)
+                .await;
+            records_mock("last.com", rpc_result(json!({"records": []})))
+                .expect(0)
+                .mount(&server)
+                .await;
+
+            let router = mock_router(&server, use_filter.then_some(domains), 0);
+            let (status, body) = get_json(router, "/records").await;
+            assert_error(status, &body, StatusCode::SERVICE_UNAVAILABLE);
+            assert!(body["error"].as_str().unwrap().contains("failing.com"));
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn get_records_returns_ordered_union_with_existing_type_filtering() {
+        for use_filter in [true, false] {
+            let server = MockServer::start().await;
+            let domains = vec!["first.com", "second.com"];
+            Mock::given(body_partial_json(json!({"method": "list-domains"})))
+                .respond_with(rpc_result(json!({"domains": [
+                    {"name": "first.com", "status": "active"},
+                    {"name": "second.com", "status": "active"}
+                ]})))
+                .expect(if use_filter { 0 } else { 1 })
+                .mount(&server)
+                .await;
+            let types = ["A", "AAAA", "CNAME", "TXT", "MX", "SRV"];
+            let mut records: Vec<_> = types
+                .iter()
+                .map(|record_type| {
+                    json!({
+                        "id": "1", "name": "@", "type": record_type,
+                        "content": "target", "ttl": 300
+                    })
+                })
+                .collect();
+            records.push(json!({
+                "id": "2", "name": "@", "type": "NS", "content": "ns.first.com"
+            }));
+            records_mock("first.com", rpc_result(json!({"records": records})))
+                .expect(1)
+                .mount(&server)
+                .await;
+            records_mock(
+                "second.com",
+                rpc_result(json!({"records": [{
+                    "id": "3", "name": "mail", "type": "MX", "content": "mx.second.com",
+                    "ttl": 600, "priority": 10
+                }]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+            let (status, body) = get_json(
+                mock_router(&server, use_filter.then_some(domains), 0),
+                "/records",
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let mut expected: Vec<_> = types
+                .iter()
+                .map(|record_type| {
+                    json!({
+                        "dnsName": "first.com", "recordType": record_type,
+                        "targets": ["target"], "recordTTL": 300
+                    })
+                })
+                .collect();
+            expected.push(json!({
+                "dnsName": "mail.second.com", "recordType": "MX",
+                "targets": ["mx.second.com"], "recordTTL": 600,
+                "providerSpecific": [{"name": "priority", "value": "10"}]
+            }));
+            assert_eq!(body, json!(expected));
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn get_records_upstream_failures_always_return_server_errors() {
+        let failures = [
+            ResponseTemplate::new(403),
+            ResponseTemplate::new(500),
+            ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "error": {"code": 403, "message": "denied"}, "id": 1
+            })),
+            ResponseTemplate::new(200).set_body_string("not JSON"),
+            ResponseTemplate::new(200).set_body_json(json!({"result": {"records": []}})),
+            ResponseTemplate::new(200).set_body_json(json!({"jsonrpc": "2.0", "id": 1})),
+            rpc_result(json!({"records": [{
+                "id": 5, "name": "@", "type": "A", "content": "192.0.2.1"
+            }]})),
+            rpc_result(json!({"records": [{
+                "id": "5", "type": "A", "content": "192.0.2.1"
+            }]})),
+            rpc_result(json!({})),
+            rpc_result(json!({"records": {}})),
+        ];
+        for response in failures {
+            for uri in ["/records", "/records?zone=example.com"] {
+                let server = MockServer::start().await;
+                records_mock("example.com", response.clone())
+                    .mount(&server)
+                    .await;
+                let (status, body) =
+                    get_json(mock_router(&server, Some(vec!["example.com"]), 0), uri).await;
+                let expected = if uri == "/records" {
+                    StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    StatusCode::BAD_GATEWAY
+                };
+                assert_error(status, &body, expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn get_records_domain_discovery_failures_return_server_errors() {
+        for response in [
+            ResponseTemplate::new(403),
+            rpc_result(json!({"domains": [{"name": 5, "status": "active"}]})),
+            rpc_result(json!({})),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(body_partial_json(json!({"method": "list-domains"})))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let (status, body) = get_json(mock_router(&server, None, 0), "/records").await;
+            assert_error(status, &body, StatusCode::BAD_GATEWAY);
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn get_records_empty_zone_is_successful() {
+        let server = MockServer::start().await;
+        records_mock("example.com", rpc_result(json!({"records": []})))
+            .expect(2)
+            .mount(&server)
+            .await;
+        for uri in ["/records", "/records?zone=example.com"] {
+            let (status, body) =
+                get_json(mock_router(&server, Some(vec!["example.com"]), 0), uri).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, json!([]));
+        }
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn get_records_disallowed_zone_stays_forbidden() {
+        let server = MockServer::start().await;
+        let (status, body) = get_json(
+            mock_router(&server, Some(vec!["example.com"]), 1),
+            "/records?zone=blocked.com",
+        )
+        .await;
+        assert_error(status, &body, StatusCode::FORBIDDEN);
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_records_deadline_covers_both_branches_and_domain_discovery() {
+        // Exercise each read path concurrently so the test takes about one deadline.
+        async fn check(uri: &str, filter: Option<Vec<&str>>, discovery: bool) {
+            let server = MockServer::start().await;
+            if discovery {
+                Mock::given(body_partial_json(json!({"method": "list-domains"})))
+                    .respond_with(
+                        rpc_result(json!({"domains": []})).set_delay(Duration::from_millis(2500)),
+                    )
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+            } else {
+                records_mock(
+                    "example.com",
+                    rpc_result(json!({"records": []})).set_delay(Duration::from_millis(2500)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            }
+            let start = std::time::Instant::now();
+            let (status, body) = get_json(mock_router(&server, filter, 1), uri).await;
+            assert_error(status, &body, StatusCode::GATEWAY_TIMEOUT);
+            assert!(body["error"].as_str().unwrap().contains("1 seconds"));
+            assert!(start.elapsed() < Duration::from_millis(2500));
+            server.verify().await;
+        }
+        tokio::join!(
+            check("/records", Some(vec!["example.com"]), false),
+            check(
+                "/records?zone=example.com",
+                Some(vec!["example.com"]),
+                false
+            ),
+            check("/records", None, true),
+        );
+    }
+
+    #[tokio::test]
+    async fn get_records_without_deadline_allows_slow_success() {
+        let server = MockServer::start().await;
+        records_mock(
+            "example.com",
+            rpc_result(json!({"records": [{
+                "id": "1", "name": "www", "type": "A", "content": "192.0.2.1", "ttl": 300
+            }]}))
+            .set_delay(Duration::from_millis(1500)),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+        let router = mock_router(&server, Some(vec!["example.com"]), 0);
+        let (all, zone) = tokio::join!(
+            get_json(router.clone(), "/records"),
+            get_json(router, "/records?zone=example.com"),
+        );
+        for (status, body) in [all, zone] {
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                body,
+                json!([{
+                    "dnsName": "www.example.com", "recordType": "A",
+                    "targets": ["192.0.2.1"], "recordTTL": 300
+                }])
+            );
+        }
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn apply_changes_upstream_decode_failure_returns_server_error() {
+        let server = MockServer::start().await;
+        records_mock("example.com", rpc_result(json!({"records": [{"id": 5}]})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let payload = json!({"create": [{
+            "dnsName": "www.example.com", "recordType": "A", "targets": ["192.0.2.1"]
+        }]});
+        let request = Request::post("/records")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+        let response = mock_router(&server, Some(vec!["example.com"]), 1)
+            .oneshot(request)
+            .await
+            .unwrap();
+        let (status, body) = response_json(response).await;
+        assert_error(status, &body, StatusCode::INTERNAL_SERVER_ERROR);
+        server.verify().await;
+    }
 
     fn test_handler() -> WebhookHandler {
         let config = Config {
@@ -521,6 +899,7 @@ mod tests {
             domain_filter: Some(vec![Config::normalize_domain("example.com")]),
             dry_run: true,
             cache_ttl_seconds: 60,
+            get_records_timeout_secs: 0,
             njalla_max_retries: 3,
             njalla_retry_base_ms: 500,
         };
@@ -560,6 +939,7 @@ mod tests {
             domain_filter: Some(domains.into_iter().map(Config::normalize_domain).collect()),
             dry_run: true,
             cache_ttl_seconds: 60,
+            get_records_timeout_secs: 0,
             njalla_max_retries: 3,
             njalla_retry_base_ms: 500,
         };
@@ -578,6 +958,7 @@ mod tests {
             domain_filter: None,
             dry_run: true,
             cache_ttl_seconds: 60,
+            get_records_timeout_secs: 0,
             njalla_max_retries: 3,
             njalla_retry_base_ms: 500,
         };
@@ -787,6 +1168,7 @@ mod tests {
             domain_filter: Some(vec!["example.com".to_string()]),
             dry_run: true,
             cache_ttl_seconds: 60,
+            get_records_timeout_secs: 0,
             njalla_max_retries: 3,
             njalla_retry_base_ms: 500,
         };
