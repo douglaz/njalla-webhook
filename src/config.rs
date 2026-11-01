@@ -10,6 +10,8 @@ pub struct Config {
     pub domain_filter: Option<Vec<String>>,
     pub dry_run: bool,
     pub cache_ttl_seconds: u64,
+    /// Total GET /records deadline in seconds; zero disables the deadline.
+    pub get_records_timeout_secs: u64,
     /// Maximum number of retries for a transient Njalla API failure (rate
     /// limits, 5xx, network errors). Total attempts = retries + 1.
     pub njalla_max_retries: u32,
@@ -53,6 +55,10 @@ impl Config {
             .unwrap_or_else(|_| "500".to_string())
             .parse::<u64>()?;
 
+        let get_records_timeout_secs = Self::parse_get_records_timeout_secs(
+            env::var("GET_RECORDS_TIMEOUT_SECS").ok().as_deref(),
+        )?;
+
         Ok(Config {
             njalla_api_token,
             webhook_host,
@@ -60,9 +66,14 @@ impl Config {
             domain_filter,
             dry_run,
             cache_ttl_seconds,
+            get_records_timeout_secs,
             njalla_max_retries,
             njalla_retry_base_ms,
         })
+    }
+
+    fn parse_get_records_timeout_secs(value: Option<&str>) -> Result<u64> {
+        Ok(value.unwrap_or("0").parse::<u64>()?)
     }
 
     pub fn is_domain_allowed(&self, domain: &str) -> bool {
@@ -87,6 +98,22 @@ impl Config {
 mod tests {
     use super::*;
 
+    #[test]
+    fn get_records_timeout_parsing() {
+        assert_eq!(Config::parse_get_records_timeout_secs(None).unwrap(), 0);
+        assert_eq!(
+            Config::parse_get_records_timeout_secs(Some("0")).unwrap(),
+            0
+        );
+        assert_eq!(
+            Config::parse_get_records_timeout_secs(Some("10")).unwrap(),
+            10
+        );
+        for value in ["invalid", "", "-1", "1.5", "18446744073709551616"] {
+            assert!(Config::parse_get_records_timeout_secs(Some(value)).is_err());
+        }
+    }
+
     fn config_with_filter(domains: Vec<&str>) -> Config {
         Config {
             njalla_api_token: String::new(),
@@ -95,6 +122,7 @@ mod tests {
             domain_filter: Some(domains.into_iter().map(Config::normalize_domain).collect()),
             dry_run: false,
             cache_ttl_seconds: 60,
+            get_records_timeout_secs: 0,
             njalla_max_retries: 3,
             njalla_retry_base_ms: 500,
         }
@@ -157,6 +185,7 @@ mod tests {
             domain_filter: None,
             dry_run: false,
             cache_ttl_seconds: 60,
+            get_records_timeout_secs: 0,
             njalla_max_retries: 3,
             njalla_retry_base_ms: 500,
         };

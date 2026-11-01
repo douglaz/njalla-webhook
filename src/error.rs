@@ -13,6 +13,12 @@ pub enum Error {
     #[error("Njalla API error: {0}")]
     NjallaApi(String),
 
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
+
+    #[error("Gateway timeout: {0}")]
+    GatewayTimeout(String),
+
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
 
@@ -43,6 +49,8 @@ impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let (status, error_message) = match self {
             Error::NjallaApi(msg) => (StatusCode::BAD_GATEWAY, msg),
+            Error::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
+            Error::GatewayTimeout(msg) => (StatusCode::GATEWAY_TIMEOUT, msg),
             Error::InvalidRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             Error::DomainNotAllowed(msg) => (StatusCode::FORBIDDEN, msg),
             Error::RecordNotFound(msg) => (StatusCode::NOT_FOUND, msg),

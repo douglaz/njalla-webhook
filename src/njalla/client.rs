@@ -57,7 +57,7 @@ impl Client {
         Self::with_api_url(api_token, max_retries, retry_base, NJALLA_API_URL)
     }
 
-    fn with_api_url(
+    pub(crate) fn with_api_url(
         api_token: &str,
         max_retries: u32,
         retry_base: Duration,
@@ -200,7 +200,8 @@ impl Client {
             .ok_or_else(|| Error::NjallaApi("Invalid domains response".to_string()))?
             .iter()
             .map(|d| serde_json::from_value(d.clone()))
-            .collect::<std::result::Result<Vec<Domain>, _>>()?;
+            .collect::<std::result::Result<Vec<Domain>, _>>()
+            .map_err(|e| Error::NjallaApi(format!("Invalid domains response: {e}")))?;
 
         info!("Listed {} domains", domains.len());
         Ok(domains)
@@ -221,7 +222,8 @@ impl Client {
             .ok_or_else(|| Error::NjallaApi("Invalid records response".to_string()))?
             .iter()
             .map(|r| serde_json::from_value(r.clone()))
-            .collect::<std::result::Result<Vec<DnsRecord>, _>>()?;
+            .collect::<std::result::Result<Vec<DnsRecord>, _>>()
+            .map_err(|e| Error::NjallaApi(format!("Invalid records response: {e}")))?;
 
         info!("Listed {} records for domain {}", records.len(), domain);
         Ok(records)

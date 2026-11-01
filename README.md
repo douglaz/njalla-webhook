@@ -120,9 +120,16 @@ nix build
 | `DOMAIN_FILTER` | Comma-separated list of domains to manage | All domains | No |
 | `DRY_RUN` | Enable dry-run mode (log changes without applying) | `false` | No |
 | `CACHE_TTL_SECONDS` | DNS records cache TTL in seconds | `60` | No |
+| `GET_RECORDS_TIMEOUT_SECS` | Total deadline in seconds for GET /records, including domain discovery and retries. `0` disables it | Unset (no deadline) | No |
 | `NJALLA_MAX_RETRIES` | Retries for transient Njalla API failures (429, 5xx, network). Total attempts = retries + 1 | `3` | No |
 | `NJALLA_RETRY_BASE_MS` | Base delay (ms) for exponential backoff between retries (`base * 2^(retry-1)`, capped at 10s) | `500` | No |
 | `RUST_LOG` | Log level (trace, debug, info, warn, error) | `info` | No |
+
+Set `GET_RECORDS_TIMEOUT_SECS` below external-dns's
+`--webhook-provider-read-timeout` + `--webhook-provider-write-timeout` (15s by default).
+On expiry, the webhook returns 504; external-dns v0.24 treats this as a soft error and
+retries on the next sync, while a client timeout is fatal. Unset or `0` keeps GET
+/records without a total deadline. This setting does not limit POST /records.
 
 ### Example .env file
 
@@ -134,6 +141,8 @@ DOMAIN_FILTER=example.com,example.org
 RUST_LOG=info
 DRY_RUN=false
 CACHE_TTL_SECONDS=60
+# Optional: return 504 before external-dns's default 15s client timeout
+# GET_RECORDS_TIMEOUT_SECS=10
 NJALLA_MAX_RETRIES=3
 NJALLA_RETRY_BASE_MS=500
 ```
